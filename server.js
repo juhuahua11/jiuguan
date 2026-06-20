@@ -469,6 +469,70 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (basePath === "/api/illustrate/generate" && method === "POST") {
+      const body = await parseBody(req);
+      const convId = (body.convId || "").trim();
+      const msgIdxRaw = body.msgIdx;
+      const prompt = (body.prompt || "").trim();
+      const engine = body.engine === "local" ? "local" : "cloud";
+      const fallback = body.fallback !== false; // 默认 true
+      if (!safeName(convId) || convId.length > 128) {
+        sendJSON(res, 400, { error: "bad convId" }); return;
+      }
+      if (!/^\d+$/.test(String(msgIdxRaw))) {
+        sendJSON(res, 400, { error: "bad msgIdx" }); return;
+      }
+      const msgIdx = parseInt(msgIdxRaw, 10);
+      if (!prompt) { sendJSON(res, 400, { error: "empty prompt" }); return; }
+
+      const fp = await getConvFile(convId);
+      if (!fp) { sendJSON(res, 404, { error: "conv not found" }); return; }
+      const conv = await readJSON(fp, null);
+      const msg = conv && Array.isArray(conv.messages) ? conv.messages[msgIdx] : null;
+      if (!msg || msg.role !== "assistant") {
+        sendJSON(res, 400, { error: "msg must be an assistant message" });
+        return;
+      }
+
+      // spawn generate.py：--json 让 stdout 只输出 JSON 行，--quiet 抑制引擎日志，
+      // --output-dir 指向 illustrations/，最后位置参数是 prompt。
+      const args = ["--json", "--engine", engine,
+                    fallback ? "--fallback" : "--no-fallback",
+                    "--output-dir", ILLUSTR_DIR, "--quiet", prompt];
+      let result;
+      try {
+        const out = await runGenerate(args);
+        const lines = out.trim().split(/\r?\n/).filter(Boolean);
+        result = JSON.parse(lines[lines.length - 1]);
+      } catch (e) {
+        sendJSON(res, 500, { ok: false, error: e.message || "spawn failed" });
+        return;
+      }
+      if (!result.ok || !result.file) {
+        sendJSON(res, 500, { ok: false, error: result.error || "画图失败" });
+        return;
+      }
+
+      // 复制到 illustrations/{convId}_{msgIdx}.png，覆盖旧图。
+      const dest = path.join(ILLUSTR_DIR, convId + "_" + msgIdx + ".png");
+      try {
+        await fsp.copyFile(result.file, dest);
+      } catch (e) {
+        sendJSON(res, 500, { ok: false, error: "复制图失败：" + e.message });
+        return;
+      }
+
+      msg.illustration = {
+        engine: result.engine,
+        prompt: prompt,
+        createdAt: Date.now(),
+      };
+      await writeJSON(fp, conv);
+
+      sendJSON(res, 200, { ok: true, illustration: { engine: result.engine } });
+      return;
+    }
+
     if (basePath === "/api/illustration" && method === "GET") {
       const conv = (query.conv || "").trim();
       const idxRaw = (query.idx || "").trim();

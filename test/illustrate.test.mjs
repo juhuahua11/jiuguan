@@ -269,3 +269,134 @@ test("POST /api/illustrate/prompt rejects bad mode and non-assistant msg", async
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
 });
+
+// mock AIDRAW_DIR helper：把真 node.exe 复制为 python/python.exe（spawn 在 Windows
+// 需要合法 PE；shebang 脚本命名 .exe 无法被 CreateProcess 加载），generate.py 写成
+// CommonJS JS（node 不关心扩展名，temp 目录无 package.json 默认 CJS）。跨平台可用。
+async function makeMockAidraw(generatePyContent) {
+  const mockAidraw = await fs.mkdtemp(path.join(os.tmpdir(), "aidraw-"));
+  const pythonDir = path.join(mockAidraw, "python");
+  await fs.mkdir(pythonDir, { recursive: true });
+  const fakePython = path.join(pythonDir, "python.exe");
+  await fs.copyFile(process.execPath, fakePython);
+  await fs.chmod(fakePython, 0o755);
+  await fs.writeFile(path.join(mockAidraw, "generate.py"), generatePyContent);
+  return mockAidraw;
+}
+
+test("POST /api/illustrate/generate spawns generate.py and writes illustration", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_2.json"), JSON.stringify({
+    id: "c_2", messages: [{ role: "assistant", content: "正文" }],
+  }));
+
+  const mockAidraw = await makeMockAidraw(
+`const fs=require("fs");const path=require("path");
+const args=process.argv.slice(2);
+let outDir=".";let prompt="x";
+for(let i=0;i<args.length;i++){
+  if(args[i]==="--output-dir"&&args[i+1]){outDir=args[i+1];i++;}
+  else if(!args[i].startsWith("-")){prompt=args[i];}
+}
+const f=path.join(outDir,"fake.png");
+fs.writeFileSync(f,Buffer.from([0x89,0x50,0x4e,0x47]));
+process.stdout.write(JSON.stringify({ok:true,file:f,engine:"cloud"}));
+`);
+
+  const proc = spawnServer({
+    JIUGUAN_DATA_DIR: dataDir,
+    PORT: "3197",
+    AIDRAW_DIR: mockAidraw,
+    AIDRAW_TIMEOUT_MS: "30000",
+  });
+  try {
+    await waitForPort(3197);
+    const r = await fetch("http://127.0.0.1:3197/api/illustrate/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_2", msgIdx: 0, prompt: "a cat" }),
+    });
+    if (r.status !== 200) {
+      assert.fail("expected 200, got " + r.status + ": " + await r.text());
+    }
+    const body = await r.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.illustration.engine, "cloud");
+    // 图被复制到 illustrations/
+    const img = await fs.readFile(path.join(dataDir, "illustrations", "c_2_0.png"));
+    assert.equal(img[0], 0x89);
+    // 对话 JSON 写回 illustration 字段
+    const conv = JSON.parse(await fs.readFile(path.join(convDir, "c_2.json"), "utf8"));
+    assert.ok(conv.messages[0].illustration);
+    assert.equal(conv.messages[0].illustration.engine, "cloud");
+    assert.equal(conv.messages[0].illustration.prompt, "a cat");
+  } finally {
+    await killServer(proc);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+    await fs.rm(mockAidraw, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/illustrate/generate handles spawn failure", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_3.json"), JSON.stringify({
+    id: "c_3", messages: [{ role: "assistant", content: "正文" }],
+  }));
+  // mock generate.py 输出 ok:false
+  const mockAidraw = await makeMockAidraw(
+`process.stdout.write(JSON.stringify({ok:false,file:"",engine:"",error:"all engines failed: cloud: no key"}));
+`);
+
+  const proc = spawnServer({
+    JIUGUAN_DATA_DIR: dataDir, PORT: "3196", AIDRAW_DIR: mockAidraw,
+  });
+  try {
+    await waitForPort(3196);
+    const r = await fetch("http://127.0.0.1:3196/api/illustrate/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_3", msgIdx: 0, prompt: "a cat" }),
+    });
+    assert.equal(r.status, 500);
+    const body = await r.json();
+    assert.equal(body.ok, false);
+    assert.ok(body.error);
+  } finally {
+    await killServer(proc);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+    await fs.rm(mockAidraw, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/illustrate/generate rejects bad inputs", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const proc = spawnServer({ JIUGUAN_DATA_DIR: dataDir, PORT: "3195" });
+  try {
+    await waitForPort(3195);
+    // bad convId（路径遍历）
+    let r = await fetch("http://127.0.0.1:3195/api/illustrate/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "../x", msgIdx: 0, prompt: "a cat" }),
+    });
+    assert.equal(r.status, 400);
+    // empty prompt
+    r = await fetch("http://127.0.0.1:3195/api/illustrate/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_x", msgIdx: 0, prompt: "  " }),
+    });
+    assert.equal(r.status, 400);
+    // bad msgIdx
+    r = await fetch("http://127.0.0.1:3195/api/illustrate/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_x", msgIdx: "abc", prompt: "a cat" }),
+    });
+    assert.equal(r.status, 400);
+  } finally {
+    await killServer(proc);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
