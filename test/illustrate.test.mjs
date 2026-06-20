@@ -322,11 +322,15 @@ process.stdout.write(JSON.stringify({ok:true,file:f,engine:"cloud"}));
       assert.fail("expected 200, got " + r.status + ": " + await r.text());
     }
     const body = await r.json();
-    assert.equal(body.ok, true);
     assert.equal(body.illustration.engine, "cloud");
     // 图被复制到 illustrations/
     const img = await fs.readFile(path.join(dataDir, "illustrations", "c_2_0.png"));
     assert.equal(img[0], 0x89);
+    // 中间产物 fake.png 应被清理（不再泄漏到 illustrations/）
+    await assert.rejects(
+      fs.readFile(path.join(dataDir, "illustrations", "fake.png")),
+      /ENOENT/
+    );
     // 对话 JSON 写回 illustration 字段
     const conv = JSON.parse(await fs.readFile(path.join(convDir, "c_2.json"), "utf8"));
     assert.ok(conv.messages[0].illustration);
@@ -363,7 +367,6 @@ test("POST /api/illustrate/generate handles spawn failure", async () => {
     });
     assert.equal(r.status, 500);
     const body = await r.json();
-    assert.equal(body.ok, false);
     assert.ok(body.error);
   } finally {
     await killServer(proc);

@@ -503,22 +503,26 @@ const server = http.createServer(async (req, res) => {
       try {
         const out = await runGenerate(args);
         const lines = out.trim().split(/\r?\n/).filter(Boolean);
+        if (!lines.length) throw new Error("generate.py 输出为空");
         result = JSON.parse(lines[lines.length - 1]);
       } catch (e) {
-        sendJSON(res, 500, { ok: false, error: e.message || "spawn failed" });
+        sendJSON(res, 500, { error: e.message || "spawn failed" });
         return;
       }
       if (!result.ok || !result.file) {
-        sendJSON(res, 500, { ok: false, error: result.error || "画图失败" });
+        sendJSON(res, 500, { error: result.error || "画图失败" });
         return;
       }
 
-      // 复制到 illustrations/{convId}_{msgIdx}.png，覆盖旧图。
+      // 复制到 illustrations/{convId}_{msgIdx}.png，覆盖旧图；删除 generate.py 的中间产物。
       const dest = path.join(ILLUSTR_DIR, convId + "_" + msgIdx + ".png");
       try {
-        await fsp.copyFile(result.file, dest);
+        if (path.resolve(result.file) !== path.resolve(dest)) {
+          await fsp.copyFile(result.file, dest);
+          await fsp.unlink(result.file).catch(() => {});
+        }
       } catch (e) {
-        sendJSON(res, 500, { ok: false, error: "复制图失败：" + e.message });
+        sendJSON(res, 500, { error: "复制图失败：" + e.message });
         return;
       }
 
@@ -527,9 +531,10 @@ const server = http.createServer(async (req, res) => {
         prompt: prompt,
         createdAt: Date.now(),
       };
+      // 单写者假设：A1111 式单任务串行出图，此处无需 per-conv 写锁。
       await writeJSON(fp, conv);
 
-      sendJSON(res, 200, { ok: true, illustration: { engine: result.engine } });
+      sendJSON(res, 200, { illustration: { engine: result.engine } });
       return;
     }
 
