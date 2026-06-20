@@ -7,16 +7,8 @@ const zlib = require("zlib");
 const crypto = require("crypto");
 const { spawn, execSync } = require("child_process");
 
-const PORT = parseInt(process.env.PORT || "3111", 10);
-const DATA_DIR =
-  process.env.JIUGUAN_DATA_DIR && process.env.JIUGUAN_DATA_DIR.trim()
-    ? process.env.JIUGUAN_DATA_DIR.trim()
-    : path.join(__dirname, "data");
-const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
-const CONV_DIR = path.join(DATA_DIR, "conversations");
-const OLD_DATA_FILE = path.join(__dirname, "data.json");
-
 // ── .env 加载 ──
+// NOTE: 必须在读取 PORT / JIUGUAN_DATA_DIR 等配置之前调用，否则 .env 中的覆盖会被忽略。
 function loadEnv(filePath) {
   try {
     const content = fs.readFileSync(filePath, "utf-8");
@@ -35,6 +27,18 @@ function loadEnv(filePath) {
   } catch {}
 }
 loadEnv(path.join(__dirname, ".env"));
+
+// ── 路径与端口配置（在 .env 加载之后读取，确保 .env 覆盖生效） ──
+const _portRaw = parseInt(process.env.PORT || "3111", 10);
+const PORT =
+  Number.isFinite(_portRaw) && _portRaw > 0 && _portRaw < 65536 ? _portRaw : 3111;
+const DATA_DIR =
+  process.env.JIUGUAN_DATA_DIR && process.env.JIUGUAN_DATA_DIR.trim()
+    ? process.env.JIUGUAN_DATA_DIR.trim()
+    : path.join(__dirname, "data");
+const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
+const CONV_DIR = path.join(DATA_DIR, "conversations");
+const OLD_DATA_FILE = path.join(__dirname, "data.json");
 
 // ── quick AIdraw 对接 ──
 // NOTE: AIDRAW_DIR resolution mirrors test/_aidraw_path.mjs — that file is the
@@ -283,8 +287,13 @@ function convMeta(conv) {
   };
 }
 
+// 校验会话/文件名只含安全字符，杜绝路径遍历。getConvFile 与 illustration 路由共用。
+function safeName(s) {
+  return /^[a-zA-Z0-9_-]+$/.test(s);
+}
+
 async function getConvFile(id) {
-  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return null;
+  if (!safeName(id)) return null;
   const fp = path.join(CONV_DIR, id + ".json");
   const exists = await fileExists(fp);
   return exists ? fp : null;
@@ -375,7 +384,7 @@ const server = http.createServer(async (req, res) => {
     if (basePath === "/api/illustration" && method === "GET") {
       const conv = (query.conv || "").trim();
       const idxRaw = (query.idx || "").trim();
-      if (!/^[a-zA-Z0-9_-]+$/.test(conv)) {
+      if (conv.length === 0 || conv.length > 128 || !safeName(conv)) {
         sendJSON(res, 400, { error: "bad conv" });
         return;
       }
@@ -384,14 +393,18 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const idx = parseInt(idxRaw, 10);
-      if (idx < 0) {
-        sendJSON(res, 400, { error: "bad idx" });
-        return;
-      }
       const fp = path.join(ILLUSTR_DIR, conv + "_" + idx + ".png");
       try {
         const buf = await fsp.readFile(fp);
         const tag = etag(buf);
+        if (req.headers["if-none-match"] === '"' + tag + '"') {
+          res.writeHead(304, {
+            "ETag": '"' + tag + '"',
+            "Cache-Control": "public, max-age=300",
+          });
+          res.end();
+          return;
+        }
         res.writeHead(200, {
           "Content-Type": "image/png",
           "Cache-Control": "public, max-age=300",
@@ -400,8 +413,7 @@ const server = http.createServer(async (req, res) => {
         });
         res.end(buf);
       } catch {
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end("404");
+        sendJSON(res, 404, { error: "Not found" });
       }
       return;
     }
