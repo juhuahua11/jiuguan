@@ -41,7 +41,9 @@ const AIDRAW_DIR = _aidrawEnv || path.join(__dirname, "..", "quick AIdraw");
 const AIDRAW_PYTHON = path.join(AIDRAW_DIR, "python", "python.exe");
 const AIDRAW_GENERATE = path.join(AIDRAW_DIR, "generate.py");
 const ILLUSTR_DIR = path.join(DATA_DIR, "illustrations");
-const AIDRAW_TIMEOUT_MS = parseInt(process.env.AIDRAW_TIMEOUT_MS || "600000", 10); // 10 min for local SDXL
+const _aidrawTimeoutRaw = parseInt(process.env.AIDRAW_TIMEOUT_MS || "600000", 10);
+const AIDRAW_TIMEOUT_MS =
+  Number.isFinite(_aidrawTimeoutRaw) && _aidrawTimeoutRaw > 0 ? _aidrawTimeoutRaw : 600000; // 10 min for local SDXL
 
 // 从 process.env 读取配置默认值
 function getEnvDefaults() {
@@ -137,6 +139,7 @@ function runGenerate(args) {
   return new Promise((resolve, reject) => {
     const child = spawn(AIDRAW_PYTHON, [AIDRAW_GENERATE, ...args], {
       cwd: AIDRAW_DIR,
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         PYTHONIOENCODING: "utf-8",
