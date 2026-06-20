@@ -5,6 +5,7 @@ const path = require("path");
 const os = require("os");
 const zlib = require("zlib");
 const crypto = require("crypto");
+const { spawn, execSync } = require("child_process");
 
 const PORT = 3111;
 const DATA_DIR = path.join(__dirname, "data");
@@ -33,14 +34,14 @@ function loadEnv(filePath) {
 loadEnv(path.join(__dirname, ".env"));
 
 // ── quick AIdraw 对接 ──
-const { spawn } = require("child_process");
-const AIDRAW_DIR = process.env.AIDRAW_DIR && process.env.AIDRAW_DIR.trim()
-  ? process.env.AIDRAW_DIR.trim()
-  : path.join(__dirname, "..", "quick AIdraw");
+// NOTE: AIDRAW_DIR resolution mirrors test/_aidraw_path.mjs — that file is the
+// source of truth for the env-override + sibling-dir fallback; keep in sync.
+const _aidrawEnv = process.env.AIDRAW_DIR && process.env.AIDRAW_DIR.trim();
+const AIDRAW_DIR = _aidrawEnv || path.join(__dirname, "..", "quick AIdraw");
 const AIDRAW_PYTHON = path.join(AIDRAW_DIR, "python", "python.exe");
 const AIDRAW_GENERATE = path.join(AIDRAW_DIR, "generate.py");
 const ILLUSTR_DIR = path.join(DATA_DIR, "illustrations");
-const AIDRAW_TIMEOUT_MS = 600000; // 10 min for local SDXL
+const AIDRAW_TIMEOUT_MS = parseInt(process.env.AIDRAW_TIMEOUT_MS || "600000", 10); // 10 min for local SDXL
 
 // 从 process.env 读取配置默认值
 function getEnvDefaults() {
@@ -146,14 +147,38 @@ function runGenerate(args) {
     });
     let stdout = "";
     let stderr = "";
+    // Set encoding so Node buffers multi-byte chars internally; per-chunk
+    // toString("utf8") would corrupt Chinese paths/errors and emoji split across
+    // chunk boundaries (stderr feeds reject messages, stdout carries JSON with
+    // ensure_ascii=False).
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      // Tree-kill so grandchild processes (local SDXL python) don't orphan on
+      // timeout and hold VRAM → GPU OOM on repeated timeouts. Windows spawn has
+      // no process groups by default, so walk the tree with taskkill /T.
+      if (process.platform === "win32") {
+        try {
+          execSync("taskkill /PID " + child.pid + " /T /F", {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+        } catch (e) {
+          child.kill("SIGKILL");
+        }
+      } else {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (e) {
+          child.kill("SIGKILL");
+        }
+      }
       reject(new Error("画图超时"));
     }, AIDRAW_TIMEOUT_MS);
-    child.stdout.on("data", (c) => (stdout += c.toString("utf8")));
+    child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => {
-      stderr += c.toString("utf8");
-      console.error("[aidraw]", c.toString("utf8").trim());
+      if (stderr.length < 20000) stderr += c;
+      console.error("[aidraw]", c.trim());
     });
     child.on("error", (e) => {
       clearTimeout(timer);
