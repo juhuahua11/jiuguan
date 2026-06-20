@@ -541,7 +541,7 @@ function buildMsg(msg, idx, isLast) {
   const long = !msg.streaming && !isLast && content.length > COLLAPSE_LEN;
   const actions =
     msg.role !== "user" && !msg.streaming
-      ? '<div class="message-actions"><button class="btn-msg-action" data-act="continue" title="继续补全">▶️</button><button class="btn-msg-action" data-act="retry" title="重新生成">🔄</button><button class="btn-msg-action" data-act="copy" title="复制">📋</button></div>'
+      ? '<div class="message-actions"><button class="btn-msg-action" data-act="continue" title="继续补全">▶️</button><button class="btn-msg-action" data-act="retry" title="重新生成">🔄</button><button class="btn-msg-action" data-act="illustrate" title="配图">' + (msg.illustration ? "🖼️" : "🖼") + '</button><button class="btn-msg-action" data-act="copy" title="复制">📋</button></div>'
       : msg.role === "user"
         ? '<div class="message-actions"><button class="btn-msg-action" data-act="recall" title="撤回">↩️</button><button class="btn-msg-action" data-act="retry-user" title="重新发送">🔄</button><button class="btn-msg-action" data-act="copy" title="复制">📋</button></div>'
         : "";
@@ -578,6 +578,14 @@ function buildMsg(msg, idx, isLast) {
         div.querySelector(".message-body").insertAdjacentHTML("beforeend", _panelHTML);
       }
     }
+  }
+  if (msg.role === "assistant" && !msg.streaming && msg.illustration) {
+    var _conv = getConv();
+    var _convId = _conv ? _conv.id : "";
+    var _img = document.createElement("div");
+    _img.className = "message-illustration";
+    _img.innerHTML = '<img src="/api/illustration?conv=' + encodeURIComponent(_convId) + '&idx=' + idx + '" loading="lazy" onerror="this.parentNode.innerHTML=\'<span class=\\\'ill-placeholder\\\'>[插图加载失败]</span>\'">';
+    div.querySelector(".message-body").appendChild(_img);
   }
   return div;
 }
