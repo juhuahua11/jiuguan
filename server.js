@@ -7,8 +7,11 @@ const zlib = require("zlib");
 const crypto = require("crypto");
 const { spawn, execSync } = require("child_process");
 
-const PORT = 3111;
-const DATA_DIR = path.join(__dirname, "data");
+const PORT = parseInt(process.env.PORT || "3111", 10);
+const DATA_DIR =
+  process.env.JIUGUAN_DATA_DIR && process.env.JIUGUAN_DATA_DIR.trim()
+    ? process.env.JIUGUAN_DATA_DIR.trim()
+    : path.join(__dirname, "data");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 const OLD_DATA_FILE = path.join(__dirname, "data.json");
@@ -369,6 +372,40 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (basePath === "/api/illustration" && method === "GET") {
+      const conv = (query.conv || "").trim();
+      const idxRaw = (query.idx || "").trim();
+      if (!/^[a-zA-Z0-9_-]+$/.test(conv)) {
+        sendJSON(res, 400, { error: "bad conv" });
+        return;
+      }
+      if (!/^\d+$/.test(idxRaw)) {
+        sendJSON(res, 400, { error: "bad idx" });
+        return;
+      }
+      const idx = parseInt(idxRaw, 10);
+      if (idx < 0) {
+        sendJSON(res, 400, { error: "bad idx" });
+        return;
+      }
+      const fp = path.join(ILLUSTR_DIR, conv + "_" + idx + ".png");
+      try {
+        const buf = await fsp.readFile(fp);
+        const tag = etag(buf);
+        res.writeHead(200, {
+          "Content-Type": "image/png",
+          "Cache-Control": "public, max-age=300",
+          "ETag": '"' + tag + '"',
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(buf);
+      } catch {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("404");
+      }
+      return;
+    }
+
     if (url === "/favicon.ico") {
       res.writeHead(204);
       res.end();
@@ -389,6 +426,7 @@ const server = http.createServer(async (req, res) => {
 (async () => {
   await fsp.mkdir(DATA_DIR, { recursive: true });
   await fsp.mkdir(CONV_DIR, { recursive: true });
+  await fsp.mkdir(ILLUSTR_DIR, { recursive: true });
   await migrateFromOld();
 
   server.listen(PORT, "0.0.0.0", () => {
