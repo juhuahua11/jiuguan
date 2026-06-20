@@ -22,7 +22,9 @@ function loadEnv(filePath) {
       if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
         val = val.slice(1, -1);
       }
-      if (key) process.env[key] = val;
+      // 不覆盖已存在的环境变量：真实 env 优先于 .env 文件（dotenv 标准行为），
+      // 这样测试可以用 API_URL 等指向本地 mock，而不被 .env 里的真实值覆盖。
+      if (key && process.env[key] === undefined) process.env[key] = val;
     }
   } catch {}
 }
@@ -205,6 +207,36 @@ function runGenerate(args) {
   });
 }
 
+// 独立调用 DeepSeek（不影响小说生成链路）。返回文本 content 或抛错。
+async function callDeepSeek(systemPrompt, userContent) {
+  const env = getEnvDefaults();
+  if (!env.apiUrl || !env.apiKey || !env.modelName) {
+    throw new Error("未配置 DeepSeek API");
+  }
+  const r = await fetch(env.apiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + env.apiKey,
+    },
+    body: JSON.stringify({
+      model: env.modelName,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userContent },
+      ],
+      stream: false,
+    }),
+  });
+  if (!r.ok) {
+    let em = "HTTP " + r.status;
+    try { em = (await r.json()).error?.message || em; } catch {}
+    throw new Error(em);
+  }
+  const d = await r.json();
+  return d.choices?.[0]?.message?.content || "";
+}
+
 function etag(buf) {
   return crypto.createHash("sha1").update(buf).digest("hex").slice(0, 12);
 }
@@ -378,6 +410,47 @@ const server = http.createServer(async (req, res) => {
           .map((f) => fsp.unlink(path.join(CONV_DIR, f)).catch(() => {})),
       );
       sendJSON(res, 200, { ok: true });
+      return;
+    }
+
+    if (basePath === "/api/illustrate/prompt" && method === "POST") {
+      const body = await parseBody(req);
+      const convId = (body.convId || "").trim();
+      const msgIdxRaw = body.msgIdx;
+      const mode = body.mode;
+      if (!safeName(convId) || convId.length > 128) {
+        sendJSON(res, 400, { error: "bad convId" });
+        return;
+      }
+      if (!/^\d+$/.test(String(msgIdxRaw))) {
+        sendJSON(res, 400, { error: "bad msgIdx" });
+        return;
+      }
+      const msgIdx = parseInt(msgIdxRaw, 10);
+      if (mode !== "extract" && mode !== "translate") {
+        sendJSON(res, 400, { error: "bad mode" });
+        return;
+      }
+      const fp = await getConvFile(convId);
+      if (!fp) { sendJSON(res, 404, { error: "conv not found" }); return; }
+      const conv = await readJSON(fp, null);
+      const msg = conv && Array.isArray(conv.messages) ? conv.messages[msgIdx] : null;
+      if (!msg || msg.role !== "assistant") {
+        sendJSON(res, 400, { error: "msg must be an assistant message" });
+        return;
+      }
+      const text = (msg.content || "").trim();
+      if (!text) { sendJSON(res, 400, { error: "empty content" }); return; }
+
+      const sys = mode === "extract"
+        ? "你是画面描述专家。读下面这段小说，提炼成一个适合AI绘画的英文画面描述，只输出英文prompt，包含主体、场景、风格、光影。不要解释。"
+        : "把下面这段中文翻译成适合AI绘画的英文提示词，保留所有视觉细节，只输出英文prompt，不要解释。";
+      try {
+        const prompt = (await callDeepSeek(sys, text)).trim();
+        sendJSON(res, 200, { prompt });
+      } catch (e) {
+        sendJSON(res, 500, { error: e.message || "提示词生成失败" });
+      }
       return;
     }
 

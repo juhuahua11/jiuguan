@@ -62,6 +62,18 @@ async function killServer(proc) {
   }
 }
 
+function spawnFakeLLM(port, content) {
+  return spawnProc("node", ["-e", `
+    const http=require("http");
+    http.createServer((req,res)=>{
+      let b="";req.on("data",c=>b+=c);req.on("end",()=>{
+        res.writeHead(200,{"Content-Type":"application/json"});
+        res.end(JSON.stringify({choices:[{message:{content:${JSON.stringify(content)}}}]}));
+      });
+    }).listen(${port});
+  `], { stdio: "ignore" });
+}
+
 test("aidrawDir resolves to sibling quick AIdraw by default", () => {
   const d = resolveAidrawDir("/some/jiuguan", "");
   assert.match(d, /quick AIdraw$/);
@@ -95,6 +107,100 @@ test("GET /api/illustration returns png and 404 when missing", async () => {
 
     // 非法 idx
     r = await fetch(`http://127.0.0.1:${PORT}/api/illustration?conv=c_1&idx=abc`);
+    assert.equal(r.status, 400);
+  } finally {
+    await killServer(proc);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/illustrate/prompt extract mode returns english prompt", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_1.json"), JSON.stringify({
+    id: "c_1", title: "t",
+    messages: [
+      { role: "user", content: "写第一章" },
+      { role: "assistant", content: "第一章 山洞里走出一个少年……" },
+    ],
+  }));
+
+  const mockPort = 3999;
+  const mock = spawnFakeLLM(mockPort, "a young boy walks out of a cave, cinematic");
+  const proc = spawnServer({
+    JIUGUAN_DATA_DIR: dataDir,
+    PORT: "3199",
+    API_URL: "http://127.0.0.1:" + mockPort + "/v1/chat/completions",
+    API_KEY: "sk-fake",
+    MODEL_NAME: "deepseek-v4-pro",
+  });
+  try {
+    await waitForPort(3199);
+    await waitForPort(mockPort);
+    const r = await fetch("http://127.0.0.1:3199/api/illustrate/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_1", msgIdx: 1, mode: "extract" }),
+    });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.prompt, "a young boy walks out of a cave, cinematic");
+  } finally {
+    await killServer(proc);
+    await killServer(mock);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/illustrate/prompt rejects bad msgIdx", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_1.json"), JSON.stringify({
+    id: "c_1", messages: [{ role: "assistant", content: "hi" }],
+  }));
+  const proc = spawnServer({ JIUGUAN_DATA_DIR: dataDir, PORT: "3199" });
+  try {
+    await waitForPort(3199);
+    const r = await fetch("http://127.0.0.1:3199/api/illustrate/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_1", msgIdx: 99, mode: "extract" }),
+    });
+    assert.equal(r.status, 400);
+  } finally {
+    await killServer(proc);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/illustrate/prompt rejects bad mode and non-assistant msg", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_1.json"), JSON.stringify({
+    id: "c_1", messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "正文" },
+    ],
+  }));
+  const proc = spawnServer({ JIUGUAN_DATA_DIR: dataDir, PORT: "3199" });
+  try {
+    await waitForPort(3199);
+    // bad mode
+    let r = await fetch("http://127.0.0.1:3199/api/illustrate/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_1", msgIdx: 1, mode: "bogus" }),
+    });
+    assert.equal(r.status, 400);
+    // msgIdx 指向 user 消息（非 assistant）
+    r = await fetch("http://127.0.0.1:3199/api/illustrate/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_1", msgIdx: 0, mode: "extract" }),
+    });
     assert.equal(r.status, 400);
   } finally {
     await killServer(proc);
