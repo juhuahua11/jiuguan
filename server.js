@@ -32,6 +32,16 @@ function loadEnv(filePath) {
 }
 loadEnv(path.join(__dirname, ".env"));
 
+// ── quick AIdraw 对接 ──
+const { spawn } = require("child_process");
+const AIDRAW_DIR = process.env.AIDRAW_DIR && process.env.AIDRAW_DIR.trim()
+  ? process.env.AIDRAW_DIR.trim()
+  : path.join(__dirname, "..", "quick AIdraw");
+const AIDRAW_PYTHON = path.join(AIDRAW_DIR, "python", "python.exe");
+const AIDRAW_GENERATE = path.join(AIDRAW_DIR, "generate.py");
+const ILLUSTR_DIR = path.join(DATA_DIR, "illustrations");
+const AIDRAW_TIMEOUT_MS = 600000; // 10 min for local SDXL
+
 // 从 process.env 读取配置默认值
 function getEnvDefaults() {
   return {
@@ -120,6 +130,44 @@ function parseQuery(url) {
     q[k] = v;
   });
   return q;
+}
+
+function runGenerate(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(AIDRAW_PYTHON, [AIDRAW_GENERATE, ...args], {
+      cwd: AIDRAW_DIR,
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: "utf-8",
+        HF_ENDPOINT: "https://hf-mirror.com",
+        HF_HUB_ENABLE_SYMLINKS: "0",
+      },
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("画图超时"));
+    }, AIDRAW_TIMEOUT_MS);
+    child.stdout.on("data", (c) => (stdout += c.toString("utf8")));
+    child.stderr.on("data", (c) => {
+      stderr += c.toString("utf8");
+      console.error("[aidraw]", c.toString("utf8").trim());
+    });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e); // ENOENT 等
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error("generate.py 退出码 " + code + (stderr ? "：" + stderr.slice(-500) : "")));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
 }
 
 function etag(buf) {
