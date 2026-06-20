@@ -153,6 +153,45 @@ test("POST /api/illustrate/prompt extract mode returns english prompt", async ()
   }
 });
 
+test("POST /api/illustrate/prompt translate mode returns english prompt", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_2.json"), JSON.stringify({
+    id: "c_2", title: "t",
+    messages: [
+      { role: "user", content: "续写" },
+      { role: "assistant", content: "月光洒在湖面上，少年撑伞独行……" },
+    ],
+  }));
+
+  const mockPort = 3998;
+  const mock = spawnFakeLLM(mockPort, "moonlight on the lake, a boy walking alone with an umbrella");
+  const proc = spawnServer({
+    JIUGUAN_DATA_DIR: dataDir,
+    PORT: "3198",
+    API_URL: "http://127.0.0.1:" + mockPort + "/v1/chat/completions",
+    API_KEY: "sk-fake",
+    MODEL_NAME: "deepseek-v4-pro",
+  });
+  try {
+    await waitForPort(3198);
+    await waitForPort(mockPort);
+    const r = await fetch("http://127.0.0.1:3198/api/illustrate/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_2", msgIdx: 1, mode: "translate" }),
+    });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.prompt, "moonlight on the lake, a boy walking alone with an umbrella");
+  } finally {
+    await killServer(proc);
+    await killServer(mock);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("POST /api/illustrate/prompt rejects bad msgIdx", async () => {
   const { tmpRoot, dataDir } = await makeTmpDataDir();
   const convDir = path.join(dataDir, "conversations");
@@ -167,6 +206,29 @@ test("POST /api/illustrate/prompt rejects bad msgIdx", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ convId: "c_1", msgIdx: 99, mode: "extract" }),
+    });
+    assert.equal(r.status, 400);
+  } finally {
+    await killServer(proc);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/illustrate/prompt rejects non-numeric msgIdx format", async () => {
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_1.json"), JSON.stringify({
+    id: "c_1", messages: [{ role: "assistant", content: "hi" }],
+  }));
+  const proc = spawnServer({ JIUGUAN_DATA_DIR: dataDir, PORT: "3199" });
+  try {
+    await waitForPort(3199);
+    // 非数字 msgIdx 命中 ^\d+$ 校验分支（区别于 99 命中的 assistant 检查分支）
+    const r = await fetch("http://127.0.0.1:3199/api/illustrate/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_1", msgIdx: "abc", mode: "extract" }),
     });
     assert.equal(r.status, 400);
   } finally {

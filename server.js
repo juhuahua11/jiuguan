@@ -8,7 +8,8 @@ const crypto = require("crypto");
 const { spawn, execSync } = require("child_process");
 
 // ── .env 加载 ──
-// NOTE: 必须在读取 PORT / JIUGUAN_DATA_DIR 等配置之前调用，否则 .env 中的覆盖会被忽略。
+// NOTE: 必须在读取 PORT / JIUGUAN_DATA_DIR 等配置之前调用，否则 .env 默认值不会生效
+// （loadEnv 不覆盖已存在的真实 env，即真实 env 优先于 .env，这是 dotenv 标准行为）。
 function loadEnv(filePath) {
   try {
     const content = fs.readFileSync(filePath, "utf-8");
@@ -30,7 +31,7 @@ function loadEnv(filePath) {
 }
 loadEnv(path.join(__dirname, ".env"));
 
-// ── 路径与端口配置（在 .env 加载之后读取，确保 .env 覆盖生效） ──
+// ── 路径与端口配置（在 .env 加载之后读取，确保 .env 默认值生效，真实 env 优先） ──
 const _portRaw = parseInt(process.env.PORT || "3111", 10);
 const PORT =
   Number.isFinite(_portRaw) && _portRaw > 0 && _portRaw < 65536 ? _portRaw : 3111;
@@ -207,27 +208,37 @@ function runGenerate(args) {
   });
 }
 
-// 独立调用 DeepSeek（不影响小说生成链路）。返回文本 content 或抛错。
-async function callDeepSeek(systemPrompt, userContent) {
-  const env = getEnvDefaults();
-  if (!env.apiUrl || !env.apiKey || !env.modelName) {
+// 独立调用 DeepSeek（不影响小说生成链路）。cfg 为合并后的配置（env 默认值 +
+// settings.json 运行时覆盖，与 GET /api/settings 同一优先级）。返回文本 content 或抛错。
+async function callDeepSeek(cfg, systemPrompt, userContent) {
+  if (!cfg.apiUrl || !cfg.apiKey || !cfg.modelName) {
     throw new Error("未配置 DeepSeek API");
   }
-  const r = await fetch(env.apiUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer " + env.apiKey,
-    },
-    body: JSON.stringify({
-      model: env.modelName,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      stream: false,
-    }),
-  });
+  let r;
+  try {
+    r = await fetch(cfg.apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + cfg.apiKey,
+      },
+      body: JSON.stringify({
+        model: cfg.modelName,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+  } catch (e) {
+    // 60s 超时（AbortSignal.timeout 抛 TimeoutError/AbortError）→ 统一为可读消息
+    if (e.name === "TimeoutError" || e.name === "AbortError") {
+      throw new Error("DeepSeek 请求超时");
+    }
+    throw e;
+  }
   if (!r.ok) {
     let em = "HTTP " + r.status;
     try { em = (await r.json()).error?.message || em; } catch {}
@@ -445,8 +456,12 @@ const server = http.createServer(async (req, res) => {
       const sys = mode === "extract"
         ? "你是画面描述专家。读下面这段小说，提炼成一个适合AI绘画的英文画面描述，只输出英文prompt，包含主体、场景、风格、光影。不要解释。"
         : "把下面这段中文翻译成适合AI绘画的英文提示词，保留所有视觉细节，只输出英文prompt，不要解释。";
+      // 合并 env 默认值 + settings.json 运行时覆盖，与 GET /api/settings 同一优先级，
+      // 这样 UI 配置的 apiUrl/apiKey/modelName 能生效，而非仅靠 env。
+      const runtime = await readJSON(SETTINGS_FILE, {});
+      const cfg = { ...getEnvDefaults(), ...runtime };
       try {
-        const prompt = (await callDeepSeek(sys, text)).trim();
+        const prompt = (await callDeepSeek(cfg, sys, text)).trim();
         sendJSON(res, 200, { prompt });
       } catch (e) {
         sendJSON(res, 500, { error: e.message || "提示词生成失败" });
