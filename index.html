@@ -438,6 +438,8 @@ const state = {
   abortController: null,
   sortMode: 0,
   uploadedFiles: [],
+  isIllustrating: false,
+  illustrateTarget: null, // {convId, msgIdx}
   settings: {
     apiUrl: "",
     apiKey: "",
@@ -499,6 +501,13 @@ const dm = {
   sortBtn: $("#sortBtn"),
   toast: $("#toast"),
   clearMemoryBtn: $("#clearMemoryBtn"),
+  illustrateModal: $("#illustrateModal"),
+  illCloseBtn: $("#illCloseBtn"),
+  illCancelBtn: $("#illCancelBtn"),
+  illGenPromptBtn: $("#illGenPromptBtn"),
+  illConfirmBtn: $("#illConfirmBtn"),
+  illPrompt: $("#illPrompt"),
+  illStatus: $("#illStatus"),
   // systemPromptEl 已禁用
 };
 
@@ -1059,6 +1068,9 @@ dm.messagesContainer.addEventListener("click", (e) => {
     case "copy":
       copyMsg(idx);
       break;
+    case "illustrate":
+      openIllustrate(idx);
+      break;
   }
 });
 
@@ -1549,6 +1561,95 @@ document.addEventListener("keydown", (e) => {
       sendMsg(dm.inputText.value);
   }
 });
+
+function openIllustrate(idx) {
+  if (state.isStreaming) return;
+  const c = getConv();
+  if (!c) return;
+  const msg = c.messages[idx];
+  if (!msg || msg.role !== "assistant") return;
+  state.illustrateTarget = { convId: c.id, msgIdx: idx };
+  dm.illPrompt.value = msg.illustration ? (msg.illustration.prompt || "") : "";
+  dm.illStatus.textContent = "";
+  dm.illStatus.className = "ill-status";
+  dm.illustrateModal.classList.add("active");
+}
+function clsIll() {
+  if (state.isIllustrating) return;
+  dm.illustrateModal.classList.remove("active");
+  state.illustrateTarget = null;
+}
+dm.illCloseBtn.addEventListener("click", clsIll);
+dm.illCancelBtn.addEventListener("click", clsIll);
+dm.illustrateModal.addEventListener("click", (e) => {
+  if (e.target === dm.illustrateModal) clsIll();
+});
+
+async function genIllPrompt() {
+  if (!state.illustrateTarget) return;
+  const { convId, msgIdx } = state.illustrateTarget;
+  const mode = document.querySelector('input[name="illSource"]:checked').value;
+  dm.illStatus.className = "ill-status busy";
+  dm.illStatus.innerHTML = '<span class="spinner"></span>生成提示词中…';
+  try {
+    const r = await fetch("/api/illustrate/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId, msgIdx, mode }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "失败");
+    dm.illPrompt.value = d.prompt;
+    dm.illStatus.textContent = "提示词已生成，可编辑后确认";
+    dm.illStatus.className = "ill-status";
+  } catch (e) {
+    dm.illStatus.textContent = "失败：" + e.message;
+    dm.illStatus.className = "ill-status error";
+  }
+}
+dm.illGenPromptBtn.addEventListener("click", genIllPrompt);
+
+async function confirmIllustrate() {
+  if (!state.illustrateTarget || state.isIllustrating) return;
+  const prompt = dm.illPrompt.value.trim();
+  if (!prompt) { toast("提示词不能为空"); return; }
+  const { convId, msgIdx } = state.illustrateTarget;
+  state.isIllustrating = true;
+  dm.illConfirmBtn.disabled = true;
+  dm.illConfirmBtn.textContent = "生成中…";
+  dm.illStatus.className = "ill-status busy";
+  dm.illStatus.innerHTML = '<span class="spinner"></span>画图中…';
+  try {
+    const r = await fetch("/api/illustrate/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId, msgIdx, prompt }),
+    });
+    const d = await r.json();
+    // server.js: 成功 200 返回 {illustration:{engine}}（无 ok 字段），
+    // 失败 500 返回 {error}（无 ok 字段）。故成功判断只用 r.ok，不能用 d.ok。
+    if (!r.ok) throw new Error(d.error || "画图失败");
+    // 更新本地消息
+    const c = getConv();
+    if (c) {
+      c.messages[msgIdx].illustration = {
+        engine: d.illustration.engine, prompt, createdAt: Date.now(),
+      };
+      save(c);
+    }
+    clsIll();
+    renderMsgs();
+    toast("插图已生成");
+  } catch (e) {
+    dm.illStatus.textContent = "失败：" + e.message;
+    dm.illStatus.className = "ill-status error";
+  } finally {
+    state.isIllustrating = false;
+    dm.illConfirmBtn.disabled = false;
+    dm.illConfirmBtn.textContent = "确认生成插图";
+  }
+}
+dm.illConfirmBtn.addEventListener("click", confirmIllustrate);
 
 load();
 dm.sortBtn.title = SORT_MODES[state.sortMode].label;
