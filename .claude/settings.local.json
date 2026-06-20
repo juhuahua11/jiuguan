@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Recurse -Depth 2 -Name \"e:\\\\code\\\\jiuguan\")",
+      "Bash(Select-Object -First 100)"
+    ]
+  }
+}

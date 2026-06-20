@@ -1,0 +1,88 @@
+<div class="app-layout">
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="btn-new-chat" id="newChatBtn"><span>+</span> 新对话</button>
+      <button class="sidebar-toggle-btn" id="closeSidebarBtn" title="收起">◀</button>
+    </div>
+    <div class="conversation-list" id="conversationList"></div>
+    <div class="sidebar-footer">
+      <span class="total-info" id="totalInfo">0 个对话</span>
+      <div style="display:flex;gap:4px">
+        <button class="btn-sort" id="sortBtn" title="切换排序">⇅</button>
+        <button class="btn-icon" id="clearAllBtn" title="清空所有对话" style="width:32px;height:32px;font-size:14px">🗑️</button>
+      </div>
+    </div>
+  </aside>
+  <div class="main-content">
+    <header class="header">
+      <div class="header-left">
+        <button class="menu-btn" id="menuBtn">≡</button>
+        <div class="header-title"><div class="logo">AI</div><span class="conv-name" id="convNameDisplay">新对话</span></div>
+      </div>
+      <div class="header-actions" style="position:relative">
+        <button class="btn-icon" id="clearMemoryBtn" title="清除当前对话的记忆宫殿数据" style="font-size:14px">🧹</button>
+        <button class="btn-icon" id="renameBtn" title="重命名当前对话" style="font-size:16px">✏️</button>
+        <button class="btn-icon" id="settingsBtn" title="设置">⚙️</button>
+        <span class="settings-dot" id="settingsDot"></span>
+      </div>
+    </header>
+    <div class="chat-container" id="chatContainer">
+      <div class="messages" id="messagesContainer">
+        <div class="messages-empty" id="emptyState">
+          <div class="welcome-icon">💬</div>
+          <h2>开始新对话</h2>
+          <p>输入你的问题，AI 将为你提供帮助。右上角设置可配置 API 信息。</p>
+        </div>
+      </div>
+    </div>
+    <div class="input-area">
+      <div class="input-wrapper">
+        <div class="uploaded-files" id="uploadedFiles"></div>
+        <div class="input-container">
+          <input type="file" id="fileInput" accept=".txt,.md,.log,.json,.csv,.xml,.yaml,.yml,.toml,.ini,.cfg,.conf,.env" style="display:none" multiple>
+          <button class="btn-upload" id="uploadBtn" title="上传文件内容到输入框">📎</button>
+          <textarea id="inputText" rows="1" placeholder="输入消息..."></textarea>
+          <button class="btn-send" id="sendBtn" disabled>➤</button>
+        </div>
+        <div class="input-footer">
+          <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+          <span class="model-badge" id="modelBadge">未配置模型</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <div class="modal-header"><h2>⚙️ 设置</h2><button class="modal-close" id="modalCloseBtn">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>服务商 <span class="label-desc">快速填入常用 API</span></label><select id="apiProvider"><option value="">自定义</option><option value="deepseek">DeepSeek</option></select></div>
+      <div class="form-group"><label>API 地址 <span class="label-desc">OpenAI 兼容格式</span></label><input type="text" id="apiUrlEl" placeholder="https://api.deepseek.com/v1/chat/completions" /><div style="font-size:11px;color:var(--text-muted);margin-top:4px">💡 输入基地址保存时自动补全路径</div></div>
+      <div class="form-group"><label>API Key</label><input type="password" id="apiKeyEl" placeholder="sk-..." /></div>
+      <div class="form-group"><label>模型名称</label><input type="text" id="modelNameEl" placeholder="deepseek-v4-pro[1m]" /></div>
+      <div class="toggle-group"><div><div class="toggle-label">流式输出</div><div class="toggle-desc">实时显示 AI 回复内容</div></div><label class="toggle"><input type="checkbox" id="streamToggle" checked /><span class="slider"></span></label></div>
+      <hr style="border:none;border-top:1px solid var(--border-color);margin:16px 0" />
+      <div class="form-group" style="margin-bottom:10px"><label style="font-size:14px;color:var(--text-primary)">🎛 高级参数 <span class="label-desc">留空则使用默认值</span></label></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label>Temperature <span class="label-desc">0-2</span></label><input type="number" id="tempEl" placeholder="1" min="0" max="2" step="0.1" /></div>
+        <div class="form-group"><label>Max Tokens <span class="label-desc">最大输出长度</span></label><input type="number" id="maxTokensEl" placeholder="4096" min="1" max="131072" step="1" /></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div class="form-group"><label>Top P <span class="label-desc">0-1</span></label><input type="number" id="topPEl" placeholder="1" min="0" max="1" step="0.05" /></div>
+        <div class="form-group"><label>频率惩罚 <span class="label-desc">0-2</span></label><input type="number" id="freqPenaltyEl" placeholder="0" min="0" max="2" step="0.1" /></div>
+        <div class="form-group"><label>存在惩罚 <span class="label-desc">0-2</span></label><input type="number" id="presPenaltyEl" placeholder="0" min="0" max="2" step="0.1" /></div>
+      </div>
+      <div class="form-group"><label>推理深度 <span class="label-desc">DeepSeek V4 专用参数</span></label><select id="reasoningEffort"><option value="">关闭</option><option value="low">低 (low)</option><option value="medium" selected>中 (medium)</option><option value="high">高 (high)</option></select></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-danger" id="resetSettingsBtn">重置</button><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="saveSettingsBtn">保存</button></div>
+  </div>
+</div>
+<div class="modal-overlay" id="renameModal">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header"><h2>✏️ 重命名对话</h2><button class="modal-close" id="renameCloseBtn">✕</button></div>
+    <div class="modal-body"><div class="form-group"><label>对话名称</label><input type="text" id="renameInput" placeholder="输入新名称" /></div></div>
+    <div class="modal-footer"><button class="btn btn-secondary" id="renameCancelBtn">取消</button><button class="btn btn-primary" id="renameSaveBtn">保存</button></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>

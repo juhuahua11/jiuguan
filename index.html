@@ -1,0 +1,1532 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>AI Chat</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}:root{--bg-primary:#212121;--bg-secondary:#171717;--bg-tertiary:#2f2f2f;--bg-hover:#3a3a3a;--bg-active:#2a2a2a;--text-primary:#ececec;--text-secondary:#b4b4b4;--text-muted:#808080;--border-color:#424242;--accent:#10a37f;--accent-hover:#0e8c6b;--shadow:0 2px 8px rgba(0,0,0,.3);--radius:12px;--radius-sm:8px;--transition:.2s ease;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--max-width:800px;--sidebar-width:260px}html{height:100%;overscroll-behavior:none}body{height:100%;font-family:var(--font);background:var(--bg-primary);color:var(--text-primary);-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%}.app-layout{display:flex;position:fixed;top:0;left:0;right:0;bottom:0;overflow:hidden}.sidebar{width:var(--sidebar-width);background:var(--bg-secondary);border-right:1px solid var(--border-color);display:flex;flex-direction:column;flex-shrink:0;transition:transform .3s;z-index:60}.sidebar-header{padding:12px 14px;border-bottom:1px solid var(--border-color);display:flex;gap:8px}.btn-new-chat{flex:1;padding:10px 16px;background:transparent;border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all var(--transition);font-family:var(--font)}.btn-new-chat:hover{background:var(--bg-hover);border-color:var(--text-muted)}.sidebar-toggle-btn{width:36px;height:36px;background:transparent;border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:all var(--transition);flex-shrink:0}.sidebar-toggle-btn:hover{background:var(--bg-hover);color:var(--text-primary)}.conversation-list{flex:1;overflow-y:auto;padding:8px;}.conversation-list::-webkit-scrollbar{width:4px}.conversation-list::-webkit-scrollbar-thumb{background:var(--border-color);border-radius:2px}.conversation-item{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--radius-sm);cursor:pointer;transition:background var(--transition);margin-bottom:2px;touch-action:manipulation;user-select:none;-webkit-user-select:none}.conversation-item:hover{background:var(--bg-hover)}.conversation-item.active{background:var(--bg-active)}.conversation-item .conv-icon{font-size:14px;flex-shrink:0;opacity:.6}.conversation-item .conv-title{flex:1;font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.4}.conversation-item .conv-time{font-size:10px;color:var(--text-muted);flex-shrink:0}.conversation-item .conv-delete{opacity:0;width:28px;height:28px;border-radius:4px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:all var(--transition);flex-shrink:0;touch-action:manipulation}.conversation-item:hover .conv-delete{opacity:1}.conversation-item .conv-delete:hover{background:rgba(231,76,60,.15);color:#e74c3c}.conversation-item .conv-delete:disabled{opacity:.25;cursor:not-allowed;pointer-events:none}.sidebar-footer{padding:12px 14px;border-top:1px solid var(--border-color);display:flex;align-items:center;justify-content:space-between}.sidebar-footer .total-info{font-size:11px;color:var(--text-muted)}.btn-sort{width:32px;height:32px;min-width:32px;border-radius:var(--radius-sm);border:1px solid var(--border-color);background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:all var(--transition);font-family:var(--font);touch-action:manipulation}.btn-sort:hover{background:var(--bg-hover);color:var(--text-primary)}.main-content{flex:1;display:flex;flex-direction:column;min-width:0}.header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--bg-secondary);border-bottom:1px solid var(--border-color);flex-shrink:0;z-index:10}.header-left{display:flex;align-items:center;gap:12px}.menu-btn{display:none;background:var(--bg-tertiary);border:1px solid var(--border-color);color:var(--text-secondary);width:32px;height:32px;border-radius:6px;cursor:pointer;font-size:18px;align-items:center;justify-content:center;transition:all var(--transition);flex-shrink:0;touch-action:manipulation}.menu-btn:hover{background:var(--bg-hover);color:var(--text-primary)}.header-title{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;min-width:0}.header-title .logo{width:28px;height:28px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0}.header-title .conv-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}.header-actions{display:flex;align-items:center;gap:6px}.btn-icon{background:transparent;border:none;color:var(--text-secondary);width:36px;height:36px;min-width:36px;min-height:36px;border-radius:var(--radius-sm);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background var(--transition);font-size:18px;touch-action:manipulation}.btn-icon:hover{background:var(--bg-hover);color:var(--text-primary)}.settings-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);position:absolute;top:6px;right:14px;display:none;pointer-events:none}.settings-dot.active{display:block}.chat-container{flex:1;overflow-y:auto;scroll-behavior:smooth;}.chat-container::-webkit-scrollbar{width:6px}.chat-container::-webkit-scrollbar-thumb{background:var(--border-color);border-radius:3px}.messages{max-width:var(--max-width);margin:0 auto;padding:20px 24px 0}.messages-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;color:var(--text-muted);padding:0 20px}.messages-empty .welcome-icon{font-size:48px;margin-bottom:16px;opacity:.5}.messages-empty h2{font-size:24px;color:var(--text-secondary);margin-bottom:8px;font-weight:500}.messages-empty p{font-size:14px;max-width:400px;line-height:1.6}.message{display:flex;gap:12px;padding:16px 0;animation:fadeIn .3s ease}@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.message-avatar{width:32px;height:32px;min-width:32px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;margin-top:2px}.message.user .message-avatar{background:#5436da;color:#fff}.message.assistant .message-avatar{background:var(--accent);color:#fff}.message.error .message-avatar{background:#e74c3c;color:#fff}.message-body{flex:1;min-width:0}.message-header{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap}.message-role{font-size:13px;font-weight:600;color:var(--text-primary)}.message-time{font-size:11px;color:var(--text-muted)}.message-content{font-size:15px;line-height:1.7;color:var(--text-primary);white-space:pre-wrap;word-break:break-word}.message-content code{background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;font-size:13px;font-family:monospace}.message-content pre{background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:12px 16px;overflow-x:auto;margin:8px 0}.message-content pre code{background:none;padding:0}.message-content.collapsed{max-height:16em;overflow:hidden;position:relative}.message-content.collapsed::after{content:'';position:absolute;bottom:0;left:0;right:0;height:50px;background:linear-gradient(transparent,var(--bg-primary));pointer-events:none}.expand-bar{display:flex;justify-content:center;margin-top:4px}.btn-expand{background:transparent;border:1px solid var(--border-color);border-radius:6px;color:var(--text-muted);cursor:pointer;font-size:12px;padding:4px 12px;font-family:var(--font);transition:all var(--transition);touch-action:manipulation}.btn-expand:hover{background:var(--bg-hover);color:var(--text-primary)}.message-actions{display:flex;gap:4px;margin-top:8px;opacity:0;transition:opacity var(--transition)}.message:hover .message-actions{opacity:1}.btn-msg-action{background:transparent;border:none;color:var(--text-muted);width:32px;height:32px;min-width:32px;min-height:32px;border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:all var(--transition);touch-action:manipulation}.btn-msg-action:hover{background:var(--bg-tertiary);color:var(--text-primary)}.message.streaming .message-content::after{content:'\25AE';animation:blink 1s step-end infinite;color:var(--accent);font-size:15px}@keyframes blink{50%{opacity:0}}.status-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--bg-tertiary);color:var(--text-muted)}.status-badge.streaming{color:var(--accent)}.status-badge.streaming::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);animation:blink 1s step-end infinite}.input-area{flex-shrink:0;padding:12px 24px 20px;background:var(--bg-primary);border-top:1px solid var(--border-color)}.input-wrapper{max-width:var(--max-width);margin:0 auto}.uploaded-files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;padding:0 4px}.file-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:8px;padding:4px 6px 4px 10px;font-size:12px;color:var(--text-primary);max-width:100%}.file-chip .file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px}.file-chip .file-remove{width:22px;height:22px;min-width:22px;border-radius:50%;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:all var(--transition);touch-action:manipulation}.file-chip .file-remove:hover{background:rgba(231,76,60,.15);color:#e74c3c}.input-container{display:flex;align-items:flex-end;gap:8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:16px;padding:8px 8px 8px 16px;transition:border-color var(--transition)}.input-container:focus-within{border-color:var(--accent)}.input-container textarea{flex:1;background:transparent;border:none;outline:none;color:var(--text-primary);font-family:var(--font);font-size:15px;line-height:1.5;resize:none;max-height:200px;padding:4px 0;min-height:24px}.input-container textarea::placeholder{color:var(--text-muted)}.btn-send{width:42px;height:42px;min-width:42px;border-radius:50%;border:none;background:var(--accent);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px;transition:background var(--transition);flex-shrink:0;touch-action:manipulation}.btn-send:hover{background:var(--accent-hover)}.btn-send:disabled{background:var(--border-color);color:var(--text-muted);cursor:not-allowed}.btn-upload{width:36px;height:36px;min-width:36px;border-radius:50%;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:all var(--transition);flex-shrink:0;touch-action:manipulation}.btn-upload:hover{background:var(--bg-hover);color:var(--text-primary)}.btn-stop{width:42px;height:42px;min-width:42px;border-radius:50%;border:none;background:#e74c3c;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:background var(--transition);flex-shrink:0;touch-action:manipulation;animation:pulse .8s ease-in-out infinite}.btn-stop:hover{background:#c0392b}@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(231,76,60,.4)}50%{box-shadow:0 0 0 8px rgba(231,76,60,0)}}.input-footer{display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding:0 4px}.input-footer .hint{font-size:12px;color:var(--text-muted)}.input-footer .model-badge{font-size:12px;color:var(--text-muted);background:var(--bg-tertiary);padding:2px 8px;border-radius:4px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(4px)}.modal-overlay.active{display:flex}.modal{background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:16px;width:90%;max-width:480px;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow);animation:modalIn .25s}@keyframes modalIn{from{opacity:0;transform:scale(.95) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}.modal-header{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 0}.modal-header h2{font-size:18px;font-weight:600}.modal-close{background:transparent;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:all var(--transition)}.modal-close:hover{background:var(--bg-hover);color:var(--text-primary)}.modal-body{padding:20px 24px}.form-group{margin-bottom:18px}.form-group:last-child{margin-bottom:0}.form-group label{display:block;font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:6px}.form-group .label-desc{font-size:11px;color:var(--text-muted);font-weight:400;margin-left:4px}.form-group input,.form-group select,.form-group textarea{width:100%;padding:10px 12px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:14px;font-family:var(--font);transition:border-color var(--transition);outline:none}.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--accent)}.form-group input::placeholder,.form-group textarea::placeholder{color:var(--text-muted)}.form-group select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23808080' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:36px}.form-group select option{background:var(--bg-secondary);color:var(--text-primary)}.toggle-group{display:flex;align-items:center;justify-content:space-between;padding:8px 0}.toggle-group .toggle-label{font-size:14px;color:var(--text-primary)}.toggle-group .toggle-desc{font-size:12px;color:var(--text-muted);margin-top:2px}.toggle{position:relative;width:44px;height:24px;flex-shrink:0;cursor:pointer}.toggle input{opacity:0;width:0;height:0;position:absolute}.toggle .slider{position:absolute;top:0;left:0;right:0;bottom:0;background:var(--border-color);border-radius:24px;transition:background var(--transition)}.toggle .slider::before{content:'';position:absolute;width:18px;height:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform var(--transition)}.toggle input:checked+.slider{background:var(--accent)}.toggle input:checked+.slider::before{transform:translateX(20px)}.modal-footer{padding:0 24px 20px;display:flex;gap:10px;justify-content:flex-end}.btn{padding:10px 20px;min-height:40px;border-radius:var(--radius-sm);font-size:14px;font-weight:500;cursor:pointer;border:none;transition:all var(--transition);font-family:var(--font);touch-action:manipulation}.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover)}.btn-secondary{background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color)}.btn-secondary:hover{background:var(--bg-hover)}.btn-danger{background:transparent;color:var(--text-muted);border:1px solid var(--border-color)}.btn-danger:hover{background:rgba(231,76,60,.1);color:#e74c3c;border-color:#e74c3c}.toast{position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--bg-tertiary);border:1px solid var(--border-color);color:var(--text-primary);padding:10px 20px;border-radius:var(--radius-sm);font-size:13px;opacity:0;transition:all .3s;z-index:200;pointer-events:none;box-shadow:var(--shadow);white-space:nowrap}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}.sidebar-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:55;touch-action:manipulation}.sidebar-overlay.active{display:block}@media(max-width:860px){.sidebar{position:fixed;top:0;left:0;bottom:0;transform:translate3d(-100%,0,0);-webkit-transform:translate3d(-100%,0,0)}.sidebar.open{transform:translate3d(0,0,0);-webkit-transform:translate3d(0,0,0)}.menu-btn{display:flex!important;width:44px;height:44px;font-size:22px}.conversation-item .conv-delete{opacity:.6}}@media(max-width:600px){.header{padding:6px 8px;gap:2px}.header-left{gap:6px}.header-title{font-size:13px;gap:4px}.header-title .logo{width:22px;height:22px;font-size:11px}.header-title .conv-name{max-width:70px}.header-actions{gap:2px}.btn-icon{width:34px;height:34px;min-width:34px;min-height:34px;font-size:17px}#settingsBtn{font-size:18px}.menu-btn{width:44px;height:44px;font-size:22px;border-radius:8px}.messages{padding:10px 8px 0}.message{gap:6px;padding:10px 0}.message-avatar{width:26px;height:26px;min-width:26px;font-size:11px}.message-content{font-size:14px;line-height:1.6}.message-actions{opacity:.8}.btn-msg-action{width:34px;height:34px;min-width:34px;min-height:34px;font-size:15px}.message-role{font-size:11px}.input-area{padding:6px 6px 10px}.input-container{border-radius:12px;padding:4px 4px 4px 10px}.input-container textarea{font-size:16px;line-height:1.4}.btn-send{width:40px;height:40px;min-width:40px}.btn-stop{width:40px;height:40px;min-width:40px}.input-footer .hint{display:none}.input-footer .model-badge{font-size:11px;max-width:100px}.modal{width:95%;max-height:90vh;border-radius:12px}.modal-body{padding:14px}.modal-header{padding:14px 14px 0}.modal-footer{padding:0 14px 14px}.form-group input,.form-group select,.form-group textarea{font-size:16px;padding:10px}.form-group label{font-size:12px}.messages-empty h2{font-size:18px}.messages-empty .welcome-icon{font-size:32px}.toast{bottom:70px;font-size:12px;padding:6px 14px}.sidebar{width:260px}.conversation-item{padding:12px 14px;gap:10px}.conversation-item .conv-title{font-size:14px}.conversation-item .conv-delete{opacity:.7;width:32px;height:32px}}
+/* ── 记忆宫殿面板 ── */
+.memory-panel{margin-top:12px;border:1px solid var(--border-color);border-radius:var(--radius-sm);background:var(--bg-secondary);overflow:hidden;font-size:13px}.memory-panel-header{padding:8px 12px;cursor:pointer;user-select:none;-webkit-user-select:none;color:var(--text-muted);display:flex;align-items:center;gap:6px;transition:background var(--transition)}.memory-panel-header:hover{background:var(--bg-hover);color:var(--text-secondary)}.memory-panel-arrow{font-size:10px;transition:transform var(--transition);display:inline-block}.memory-panel:not(.expanded) .memory-panel-arrow{transform:rotate(-90deg)}.memory-panel-body{padding:6px 12px 10px;border-top:1px solid var(--border-color);line-height:1.6;color:var(--text-secondary);display:block}.memory-panel:not(.expanded) .memory-panel-body{display:none}.memory-line{padding:2px 0}.memory-label{color:var(--text-muted);font-weight:600;margin-right:2px}
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="btn-new-chat" id="newChatBtn"><span>+</span> 新对话</button>
+      <button class="sidebar-toggle-btn" id="closeSidebarBtn" title="收起">◀</button>
+    </div>
+    <div class="conversation-list" id="conversationList"></div>
+    <div class="sidebar-footer">
+      <span class="total-info" id="totalInfo">0 个对话</span>
+      <div style="display:flex;gap:4px">
+        <button class="btn-sort" id="sortBtn" title="切换排序">⇅</button>
+        <button class="btn-icon" id="clearAllBtn" title="清空所有对话" style="width:32px;height:32px;font-size:14px">🗑️</button>
+      </div>
+    </div>
+  </aside>
+  <div class="main-content">
+    <header class="header">
+      <div class="header-left">
+        <button class="menu-btn" id="menuBtn">≡</button>
+        <div class="header-title"><div class="logo">AI</div><span class="conv-name" id="convNameDisplay">新对话</span></div>
+      </div>
+      <div class="header-actions" style="position:relative">
+        <button class="btn-icon" id="clearMemoryBtn" title="清除当前对话的记忆宫殿数据" style="font-size:14px">🧹</button>
+        <button class="btn-icon" id="renameBtn" title="重命名当前对话" style="font-size:16px">✏️</button>
+        <button class="btn-icon" id="settingsBtn" title="设置">⚙️</button>
+        <span class="settings-dot" id="settingsDot"></span>
+      </div>
+    </header>
+    <div class="chat-container" id="chatContainer">
+      <div class="messages" id="messagesContainer">
+        <div class="messages-empty" id="emptyState">
+          <div class="welcome-icon">💬</div>
+          <h2>开始新对话</h2>
+          <p>输入你的问题，AI 将为你提供帮助。右上角设置可配置 API 信息。</p>
+        </div>
+      </div>
+    </div>
+    <div class="input-area">
+      <div class="input-wrapper">
+        <div class="uploaded-files" id="uploadedFiles"></div>
+        <div class="input-container">
+          <input type="file" id="fileInput" accept=".txt,.md,.log,.json,.csv,.xml,.yaml,.yml,.toml,.ini,.cfg,.conf,.env" style="display:none" multiple>
+          <button class="btn-upload" id="uploadBtn" title="上传文件内容到输入框">📎</button>
+          <textarea id="inputText" rows="1" placeholder="输入消息..."></textarea>
+          <button class="btn-send" id="sendBtn" disabled>➤</button>
+        </div>
+        <div class="input-footer">
+          <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+          <span class="model-badge" id="modelBadge">未配置模型</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <div class="modal-header"><h2>⚙️ 设置</h2><button class="modal-close" id="modalCloseBtn">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>服务商 <span class="label-desc">快速填入常用 API</span></label><select id="apiProvider"><option value="">自定义</option><option value="deepseek">DeepSeek</option></select></div>
+      <div class="form-group"><label>API 地址 <span class="label-desc">OpenAI 兼容格式</span></label><input type="text" id="apiUrlEl" placeholder="https://api.deepseek.com/v1/chat/completions" /><div style="font-size:11px;color:var(--text-muted);margin-top:4px">💡 输入基地址保存时自动补全路径</div></div>
+      <div class="form-group"><label>API Key</label><input type="password" id="apiKeyEl" placeholder="sk-..." /></div>
+      <div class="form-group"><label>模型名称</label><input type="text" id="modelNameEl" placeholder="deepseek-v4-pro[1m]" /></div>
+      <div class="toggle-group"><div><div class="toggle-label">流式输出</div><div class="toggle-desc">实时显示 AI 回复内容</div></div><label class="toggle"><input type="checkbox" id="streamToggle" checked /><span class="slider"></span></label></div>
+      <hr style="border:none;border-top:1px solid var(--border-color);margin:16px 0" />
+      <div class="form-group" style="margin-bottom:10px"><label style="font-size:14px;color:var(--text-primary)">🎛 高级参数 <span class="label-desc">留空则使用默认值</span></label></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="form-group"><label>Temperature <span class="label-desc">0-2</span></label><input type="number" id="tempEl" placeholder="1" min="0" max="2" step="0.1" /></div>
+        <div class="form-group"><label>Max Tokens <span class="label-desc">最大输出长度</span></label><input type="number" id="maxTokensEl" placeholder="4096" min="1" max="131072" step="1" /></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div class="form-group"><label>Top P <span class="label-desc">0-1</span></label><input type="number" id="topPEl" placeholder="1" min="0" max="1" step="0.05" /></div>
+        <div class="form-group"><label>频率惩罚 <span class="label-desc">0-2</span></label><input type="number" id="freqPenaltyEl" placeholder="0" min="0" max="2" step="0.1" /></div>
+        <div class="form-group"><label>存在惩罚 <span class="label-desc">0-2</span></label><input type="number" id="presPenaltyEl" placeholder="0" min="0" max="2" step="0.1" /></div>
+      </div>
+      <div class="form-group"><label>推理深度 <span class="label-desc">DeepSeek V4 专用参数</span></label><select id="reasoningEffort"><option value="">关闭</option><option value="low">低 (low)</option><option value="medium" selected>中 (medium)</option><option value="high">高 (high)</option></select></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-danger" id="resetSettingsBtn">重置</button><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="saveSettingsBtn">保存</button></div>
+  </div>
+</div>
+<div class="modal-overlay" id="renameModal">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header"><h2>✏️ 重命名对话</h2><button class="modal-close" id="renameCloseBtn">✕</button></div>
+    <div class="modal-body"><div class="form-group"><label>对话名称</label><input type="text" id="renameInput" placeholder="输入新名称" /></div></div>
+    <div class="modal-footer"><button class="btn btn-secondary" id="renameCancelBtn">取消</button><button class="btn btn-primary" id="renameSaveBtn">保存</button></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>const SYSTEM_PROMPT = `
+### 文风：
+1. **第三人称多视角切换**：以旁观者为主要视角，但可切换至施害者和受害者视角制造张力
+2. **粗鄙化词汇系统**：完全采用最直白、最粗暴的性俚语和生殖器直称，无任何美化
+3. **拟声词主导的高潮节奏**：以“啪啪啪”“噗呲噗呲”等拟声词独立成句标示性行为节奏
+4. **肉体细节的特写式描写**：视觉导向的身体描写极度细化到器官颜色、形状、肿胀、液体
+5. **“美丑对比”作为核心张力来源**：圣洁美丽与肮脏丑陋的极端对比制造冲击力
+6. **“偷窥闯入”式情节推进**：通过“正好撞见”“跟踪发现”等巧合推进情节
+7. **性行为循环结构**：“前戏—插入—爆肏—灌精”作为一个循环单元反复出现
+8. **权力确认的语言模式**：“叫爸爸”“乖女儿”等称呼系统和命令-应答结构
+9. **受害者的反应递进**：从反抗到求饶到崩坏到雌叫的语言和行为退化曲线
+10. **旁观者无力感的重复强调**：“眼睁睁看着”“只能”“什么都做不了”等表达高频出现
+
+### 回复模版要求：
+回复严格遵循以下格式：
+纯文本，小说式：
+[章节序号+章节标题]
+[叙事正文]
+(要求：高质量长文本的单章小说，不低于2000字一章)
+---
+---
+【下一步剧情发展推荐选项】
+ 选项 A：[保守/遵循原著型]
+ 选项 B：[戏谑/调教博弈型]
+ 选项 C：[规则/常识修改型]
+ 选项 D：[创新/性癖增加型]
+ 
+`;
+// 记忆宫殿模块
+// 负责：STM 生成、LTM 合并、记忆 prompt 构建、前端面板 HTML
+
+// ── 摘要 API 调用 ──
+async function callSummaryAPI(messages, settings) {
+  const { apiUrl, apiKey, modelName } = settings;
+  const url = apiUrl.replace(/\/chat\/completions\/?$/, "") + "/chat/completions";
+  const body = {
+    model: modelName,
+    messages: messages,
+    stream: false,
+    temperature: 0.3,
+    max_tokens: 2000,
+  };
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(url.includes("xiaomimimo")
+        ? { "api-key": apiKey }
+        : { Authorization: "Bearer " + apiKey }),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const errText = await r.text().catch(function() { return "unknown"; });
+    throw new Error("摘要 API 调用失败: HTTP " + r.status + " " + errText.slice(0, 100));
+  }
+  const d = await r.json();
+  return d.choices?.[0]?.message?.content || "";
+}
+
+// ── STM 生成 prompt ──
+const STM_SYSTEM_PROMPT = "你是一个记忆归档助手。你的任务是根据一轮对话（用户消息+AI回复），提取结构化的短期记忆。\n\n规则：\n1. 变化描述严格基于对话原文，不夸张、不补充、不推测\n2. 没有发生的维度可以省略对应字段或留空数组\n3. 角色名严格使用对话中出现的名字\n4. 只做客观归纳，不加入主观评价\n\n输出必须是合法的 JSON 对象，格式如下：\n{\n  \"characters\": [\"角色1\", \"角色2\"],\n  \"keyEvent\": \"本轮核心事件（1-2句）\",\n  \"psychologicalChanges\": [\n    { \"character\": \"角色名\", \"from\": \"变化前状态\", \"to\": \"变化后状态\", \"note\": \"补充说明\" }\n  ],\n  \"physiologicalChanges\": [\n    { \"character\": \"角色名\", \"change\": \"变化描述\" }\n  ],\n  \"relationshipChanges\": [\n    { \"from\": \"角色A\", \"to\": \"角色B\", \"fromState\": \"变化前关系\", \"toState\": \"变化后关系\" }\n  ],\n  \"newSettings\": [\"新增设定1\", \"新增设定2\"]\n}";
+
+function buildSTMPrompt(userMsg, assistantMsg) {
+  return [
+    { role: "system", content: STM_SYSTEM_PROMPT },
+    { role: "user", content: "用户消息：\n" + userMsg + "\n\nAI回复：\n" + assistantMsg + "\n\n请提取本轮对话的短期记忆，输出JSON。" },
+  ];
+}
+
+// ── LTM 合并 prompt ──
+const LTM_SYSTEM_PROMPT = "你是一个记忆归档助手。你的任务是将 7 条短期记忆（结构化JSON）合并为1条长期记忆。\n\n规则：\n1. 基于给出的短期记忆内容进行归纳，不要凭空添加信息\n2. 剧情线总结应该连贯叙事，串联这7轮的关键事件\n3. 角色变化汇总应体现这段时间内的整体弧光，包含数值变化和关键转折\n\n输出必须是合法的 JSON 对象，格式如下：\n{\n  \"plotSummary\": \"第N-M轮的剧情线总结（叙事性文字）\",\n  \"characterArcs\": [\n    { \"character\": \"角色名\", \"arc\": \"变化脉络（如：高冷仙子→肉体屈服意志仍在挣扎）\", \"detail\": \"详细说明\" }\n  ]\n}";
+
+function buildLTMPrompt(stms) {
+  const stmText = stms.map(function(s, i) {
+    return "第 " + s.round + " 轮：\n" + JSON.stringify(s, null, 2);
+  }).join("\n\n");
+  return [
+    { role: "system", content: LTM_SYSTEM_PROMPT },
+    { role: "user", content: "以下7条短期记忆：\n\n" + stmText + "\n\n请合并为1条长期记忆，输出JSON。" },
+  ];
+}
+
+// ── 提取 JSON ──
+function extractJSON(raw) {
+  let json = raw.trim();
+  const codeMatch = json.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeMatch) json = codeMatch[1].trim();
+  return JSON.parse(json);
+}
+
+// ── 生成短期记忆 ──
+async function generateSTM(conv, round, userContent, assistantContent, settings) {
+  const messages = buildSTMPrompt(userContent, assistantContent);
+  const raw = await callSummaryAPI(messages, settings);
+  const data = extractJSON(raw);
+  return {
+    id: "stm_" + round,
+    round: round,
+    characters: data.characters || [],
+    keyEvent: data.keyEvent || "",
+    psychologicalChanges: data.psychologicalChanges || [],
+    physiologicalChanges: data.physiologicalChanges || [],
+    relationshipChanges: data.relationshipChanges || [],
+    newSettings: data.newSettings || [],
+  };
+}
+
+// ── 合并长期记忆 ──
+async function mergeToLTM(conv, stms, settings) {
+  const messages = buildLTMPrompt(stms);
+  const raw = await callSummaryAPI(messages, settings);
+  const data = extractJSON(raw);
+  const firstRound = stms[0].round;
+  const lastRound = stms[stms.length - 1].round;
+  return {
+    id: "ltm_" + (conv.memory.longTerm.length + 1),
+    roundsCovered: firstRound + "-" + lastRound,
+    plotSummary: data.plotSummary || "",
+    characterArcs: data.characterArcs || [],
+    mergedFrom: stms.map(function(s) { return s.id; }),
+  };
+}
+
+// ── 初始化记忆结构 ──
+function ensureMemory(conv) {
+  if (!conv.memory) {
+    conv.memory = { shortTerm: [], longTerm: [], lastMergedRound: 0 };
+  }
+  return conv.memory;
+}
+
+// ── 主入口：每轮对话后触发 ──
+async function triggerMemoryUpdate(conv, settings) {
+  if (!conv || !conv.messages) return;
+  ensureMemory(conv);
+
+  // 找到最新的 user-assistant 配对
+  const msgs = conv.messages;
+  let lastUserIdx = -1;
+  let lastAsstIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "assistant" && lastAsstIdx === -1) lastAsstIdx = i;
+    if (msgs[i].role === "user" && lastUserIdx === -1) lastUserIdx = i;
+    if (lastUserIdx !== -1 && lastAsstIdx !== -1) break;
+  }
+  if (lastUserIdx === -1 || lastAsstIdx === -1) return;
+
+  // 计算轮次（user消息数量）
+  let round = 0;
+  for (let j = 0; j <= lastAsstIdx; j++) {
+    if (msgs[j].role === "user") round++;
+  }
+
+  // 检查是否已有此轮 STM
+  const existing = conv.memory.shortTerm.filter(function(s) { return s.round === round; });
+  if (existing.length > 0) return;
+
+  const userContent = msgs[lastUserIdx].content;
+  const asstContent = msgs[lastAsstIdx].content;
+
+  // 跳过太短的回复（可能是错误或取消）
+  if (asstContent.length < 20) return;
+
+  try {
+    const stm = await generateSTM(conv, round, userContent, asstContent, settings);
+    conv.memory.shortTerm.push(stm);
+
+    // 未合并的 STM
+    const unmerged = conv.memory.shortTerm.filter(function(s) {
+      return s.round > conv.memory.lastMergedRound;
+    });
+
+    // 每 7 条合并一次
+    if (unmerged.length >= 7) {
+      const toMerge = unmerged.slice(-7);
+      try {
+        const ltm = await mergeToLTM(conv, toMerge, settings);
+        conv.memory.longTerm.push(ltm);
+        conv.memory.lastMergedRound = toMerge[6].round;
+      } catch (e) {
+        console.error("LTM 合并失败:", e);
+      }
+    }
+  } catch (e) {
+    console.error("STM 生成失败:", e);
+  }
+}
+
+// ── 构建注入 system prompt 的记忆文本 ──
+// query: 可选，当前用户消息，用于关键词相关性过滤
+function buildMemoryPrompt(conv, query) {
+  ensureMemory(conv);
+  const stms = conv.memory.shortTerm;
+  const ltms = conv.memory.longTerm;
+  const lastMerged = conv.memory.lastMergedRound || 0;
+
+  const unmergedSTMs = stms.filter(function(s) { return s.round > lastMerged; });
+
+  if (unmergedSTMs.length === 0 && ltms.length === 0) return "";
+
+  // 提取查询关键词（长度>=2的中文或英文词）
+  var keywords = [];
+  if (query) {
+    keywords = query.split(/[，,。！？!?\s\n…—]+/).filter(function(k) {
+      return k.length >= 2;
+    });
+  }
+
+  // 相关性过滤：有 query 时只保留匹配的短期记忆
+  var filteredSTMs = unmergedSTMs;
+  if (keywords.length > 0) {
+    filteredSTMs = unmergedSTMs.filter(function(s) {
+      var text = (s.keyEvent || "") + " " +
+        (s.characters || []).join(" ") + " " +
+        (s.newSettings || []).join(" ");
+      s.psychologicalChanges.forEach(function(p) {
+        text += " " + p.character + " " + p.from + " " + p.to + " " + (p.note || "");
+      });
+      s.physiologicalChanges.forEach(function(p) {
+        text += " " + p.character + " " + p.change;
+      });
+      s.relationshipChanges.forEach(function(r) {
+        text += " " + r.from + " " + r.to + " " + r.fromState + " " + r.toState;
+      });
+      return keywords.some(function(k) { return text.indexOf(k) !== -1; });
+    });
+  }
+
+  if (filteredSTMs.length === 0 && ltms.length === 0) return "";
+
+  // 紧凑格式输出
+  var text = "\n\n[记忆档案] 据此保持角色一致性与剧情连贯。";
+
+  if (filteredSTMs.length > 0) {
+    text += "\n近期：";
+    filteredSTMs.forEach(function(s) {
+      text += "\nR" + s.round + ": " + (s.keyEvent || "");
+      var extras = [];
+      s.psychologicalChanges.forEach(function(p) {
+        extras.push(p.character + "心理 " + p.from + "→" + p.to + (p.note ? "(" + p.note + ")" : ""));
+      });
+      s.physiologicalChanges.forEach(function(p) {
+        extras.push(p.character + "生理 " + p.change);
+      });
+      s.relationshipChanges.forEach(function(r) {
+        extras.push(r.from + "→" + r.to + "关系 " + r.fromState + "→" + r.toState);
+      });
+      s.newSettings.forEach(function(ns) {
+        extras.push("新设定：" + ns);
+      });
+      if (extras.length > 0) text += " | " + extras.join("；");
+    });
+  }
+
+  if (ltms.length > 0) {
+    text += "\n历史概要：";
+    ltms.forEach(function(l) {
+      text += "\n[" + l.roundsCovered + "轮] " + l.plotSummary;
+      if (l.characterArcs.length > 0) {
+        var arcs = l.characterArcs.map(function(c) {
+          return c.character + "：" + c.arc;
+        });
+        text += "（" + arcs.join("；") + "）";
+      }
+    });
+  }
+
+  return text;
+}
+
+// ── 构建前端记忆面板 HTML ──
+function buildMemoryPanelHTML(conv, round) {
+  ensureMemory(conv);
+  const stm = conv.memory.shortTerm.filter(function(s) { return s.round === round; })[0];
+  if (!stm) return "";
+
+  let html = '<div class="memory-panel">';
+  html += '<div class="memory-panel-header" onclick="this.parentElement.classList.toggle(\'expanded\')">';
+  html += '<span class="memory-panel-arrow">▼</span> 【记忆宫殿】第 ' + stm.round + ' 轮摘要';
+  html += '</div>';
+  html += '<div class="memory-panel-body">';
+
+  if (stm.characters.length > 0) {
+    html += '<div class="memory-line"><span class="memory-label">涉及：</span>' + h(stm.characters.join("、")) + '</div>';
+  }
+  if (stm.keyEvent) {
+    html += '<div class="memory-line"><span class="memory-label">事件：</span>' + h(stm.keyEvent) + '</div>';
+  }
+  stm.psychologicalChanges.forEach(function(p) {
+    let line = '<div class="memory-line"><span class="memory-label">心理：</span>' + h(p.character + " " + p.from + "→" + p.to);
+    if (p.note) line += "（" + h(p.note) + "）";
+    line += '</div>';
+    html += line;
+  });
+  stm.physiologicalChanges.forEach(function(p) {
+    html += '<div class="memory-line"><span class="memory-label">生理：</span>' + h(p.character + " " + p.change) + '</div>';
+  });
+  stm.relationshipChanges.forEach(function(r) {
+    html += '<div class="memory-line"><span class="memory-label">关系：</span>' + h(r.from + "→" + r.to + " " + r.fromState + "→" + r.toState) + '</div>';
+  });
+  if (stm.newSettings.length > 0) {
+    stm.newSettings.forEach(function(ns) {
+      html += '<div class="memory-line"><span class="memory-label">新设定：</span>' + h(ns) + '</div>';
+    });
+  }
+
+  html += '</div></div>';
+  return html;
+}
+const $ = (s) => document.querySelector(s);
+
+const state = {
+  conversations: [],
+  currentId: null,
+  isStreaming: false,
+  abortController: null,
+  sortMode: 0,
+  uploadedFiles: [],
+  settings: {
+    apiUrl: "",
+    apiKey: "",
+    modelName: "",
+    stream: true,
+    systemPrompt: null,  // 已禁用，只使用 system-prompt.js
+    reasoningEffort: "medium",
+    temperature: "",
+    maxTokens: "",
+    topP: "",
+    frequencyPenalty: "",
+    presencePenalty: "",
+  },
+};
+
+const dm = {
+  sidebar: $("#sidebar"),
+  sidebarOverlay: $("#sidebarOverlay"),
+  menuBtn: $("#menuBtn"),
+  closeSidebarBtn: $("#closeSidebarBtn"),
+  conversationList: $("#conversationList"),
+  newChatBtn: $("#newChatBtn"),
+  totalInfo: $("#totalInfo"),
+  clearAllBtn: $("#clearAllBtn"),
+  convNameDisplay: $("#convNameDisplay"),
+  chatContainer: $("#chatContainer"),
+  messagesContainer: $("#messagesContainer"),
+  emptyState: $("#emptyState"),
+  inputText: $("#inputText"),
+  fileInput: $("#fileInput"),
+  uploadBtn: $("#uploadBtn"),
+  uploadedFiles: $("#uploadedFiles"),
+  sendBtn: $("#sendBtn"),
+  settingsBtn: $("#settingsBtn"),
+  settingsDot: $("#settingsDot"),
+  modelBadge: $("#modelBadge"),
+  settingsModal: $("#settingsModal"),
+  modalCloseBtn: $("#modalCloseBtn"),
+  cancelBtn: $("#cancelBtn"),
+  saveSettingsBtn: $("#saveSettingsBtn"),
+  resetSettingsBtn: $("#resetSettingsBtn"),
+  apiUrlEl: $("#apiUrlEl"),
+  apiKeyEl: $("#apiKeyEl"),
+  modelNameEl: $("#modelNameEl"),
+  apiProviderEl: $("#apiProvider"),
+  streamToggle: $("#streamToggle"),
+  reasoningEffort: $("#reasoningEffort"),
+  tempEl: $("#tempEl"),
+  maxTokensEl: $("#maxTokensEl"),
+  topPEl: $("#topPEl"),
+  freqPenaltyEl: $("#freqPenaltyEl"),
+  presPenaltyEl: $("#presPenaltyEl"),
+  renameBtn: $("#renameBtn"),
+  renameModal: $("#renameModal"),
+  renameInput: $("#renameInput"),
+  renameCloseBtn: $("#renameCloseBtn"),
+  renameCancelBtn: $("#renameCancelBtn"),
+  renameSaveBtn: $("#renameSaveBtn"),
+  sortBtn: $("#sortBtn"),
+  toast: $("#toast"),
+  clearMemoryBtn: $("#clearMemoryBtn"),
+  // systemPromptEl 已禁用
+};
+
+const SORT_MODES = [
+  { key: "updated-desc", label: "↓ 最近更新", fn: (a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt) },
+  { key: "created-asc", label: "↑ 最早创建", fn: (a, b) => (a.createdAt || a.updatedAt) - (b.createdAt || b.updatedAt) },
+  { key: "name-asc",   label: "A→Z 名称",  fn: (a, b) => (a.title || "").localeCompare(b.title || "", "zh-CN") },
+  { key: "name-desc",  label: "Z→A 名称",  fn: (a, b) => (b.title || "").localeCompare(a.title || "", "zh-CN") },
+];
+
+const PROVIDERS = {
+  deepseek: {
+    url: "https://api.deepseek.com/v1/chat/completions",
+    model: "deepseek-v4-pro",
+    keyHint: "sk-...",
+    reasoningEffort: "high",
+  },
+};
+
+// 异步管道：pipe(f, g, h)(x) => h(g(f(x)))
+const pipe = (...fns) => (input) =>
+  fns.reduce((p, fn) => p.then(fn), Promise.resolve(input));
+
+// Step 1: 注入系统提示词
+const injectSystemPrompt = (conv) => (messages) => {
+  const basePrompt = SYSTEM_PROMPT;
+  return [
+    { role: "system", content: basePrompt },
+    ...messages.filter(
+      (m) => (m.role === "user" || m.role === "assistant") && !m.streaming
+    ),
+  ];
+};
+
+// Step 2: 构建 API 请求体
+const buildRequestBody = (model, stream) => (messages) => {
+  const body = { model, messages, stream };
+  const s = state.settings;
+  if (s.reasoningEffort) {
+    if (model.startsWith("mimo")) {
+      body.chat_template_kwargs = { enable_thinking: true };
+    } else {
+      body.thinking = { type: "enabled" };
+      body.reasoning_effort = s.reasoningEffort;
+    }
+  }
+  if (s.temperature) body.temperature = parseFloat(s.temperature);
+  if (s.maxTokens) body.max_tokens = parseInt(s.maxTokens);
+  if (s.topP) body.top_p = parseFloat(s.topP);
+  if (s.frequencyPenalty)
+    body.frequency_penalty = parseFloat(s.frequencyPenalty);
+  if (s.presencePenalty)
+    body.presence_penalty = parseFloat(s.presencePenalty);
+  return body;
+};
+
+// Step 3: 调用大模型 API
+const callLLM = (url, key) => async (body) => {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(url.includes("xiaomimimo")
+        ? { "api-key": key }
+        : { Authorization: "Bearer " + key }),
+    },
+    body: JSON.stringify(body),
+    signal: state.abortController.signal,
+  });
+  if (!r.ok) {
+    let em = "HTTP " + r.status;
+    try {
+      const ed = await r.json();
+      em = ed.error?.message || em;
+    } catch (e) {
+      try { em = await r.text(); } catch (e2) {}
+    }
+    throw new Error(em + (r.status === 404 ? " (请检查 API 地址)" : ""));
+  }
+  return r;
+};
+
+// Step 4: 提取响应内容（非流式）
+const extractContent = async (response) => {
+  const d = await response.json();
+  return d.choices?.[0]?.message?.content || "";
+};
+
+// Step 5: 内容格式转换
+const formatContent = (content) => content;
+
+// Step 4s: 流式内容生成器
+async function* streamContent(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() || "";
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || !t.startsWith("data: ")) continue;
+      const d = t.slice(6);
+      if (d === "[DONE]") continue;
+      try {
+        const p = JSON.parse(d);
+        const delta = p.choices?.[0]?.delta?.content || "";
+        if (delta) yield delta;
+      } catch (e) {}
+    }
+  }
+}
+
+const API_SETTINGS = window.location.origin + "/api/settings";
+const API_CONVERSATIONS = window.location.origin + "/api/conversations";
+const API_CONV = window.location.origin + "/api/conv";
+const API_CONV_CLEAR = window.location.origin + "/api/conversations/clear";
+
+function h(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+let settingsTimer = null;
+function saveSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(API_SETTINGS, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state.settings),
+      });
+      if (!r.ok) throw new Error("fail");
+    } catch (e) {
+      localStorage.setItem(
+        "ai-chat-settings-fb",
+        JSON.stringify(state.settings),
+      );
+    }
+  }, 200);
+}
+
+const convSaveTimers = {};
+function saveConv(conv) {
+  if (!conv || !conv.id) return;
+  clearTimeout(convSaveTimers[conv.id]);
+  convSaveTimers[conv.id] = setTimeout(async () => {
+    try {
+      const r = await fetch(API_CONV, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(conv),
+      });
+      if (!r.ok) throw new Error("fail");
+    } catch (e) {
+      localStorage.setItem(
+        "ai-chat-fallback-v3",
+        JSON.stringify({ id: conv.id, data: conv }),
+      );
+    }
+  }, 200);
+}
+
+function save(conv) {
+  saveSettings();
+  if (conv) saveConv(conv);
+}
+
+function mdBadge() {
+  const s = state.settings;
+  dm.modelBadge.textContent =
+    s.apiUrl && s.apiKey && s.modelName ? s.modelName : "未配置模型";
+  dm.settingsDot.classList.toggle(
+    "active",
+    !(s.apiUrl && s.apiKey && s.modelName),
+  );
+}
+function toast(msg) {
+  dm.toast.textContent = msg;
+  dm.toast.classList.add("show");
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => dm.toast.classList.remove("show"), 2000);
+}
+function scrollEnd() {
+  requestAnimationFrame(() => {
+    dm.chatContainer.scrollTop = dm.chatContainer.scrollHeight;
+  });
+}
+function resize() {
+  dm.inputText.style.height = "auto";
+  dm.inputText.style.height = Math.min(dm.inputText.scrollHeight, 200) + "px";
+}
+function hdrTitle() {
+  const c = getConv();
+  dm.convNameDisplay.textContent = c ? c.title : "新对话";
+}
+
+dm.apiProviderEl.addEventListener("change", () => {
+  const p = PROVIDERS[dm.apiProviderEl.value];
+  if (!p) return;
+  dm.apiUrlEl.value = p.url;
+  dm.modelNameEl.value = p.model;
+  dm.apiKeyEl.placeholder = p.keyHint;
+  if (p.keyHint === "无需 Key（留空）") dm.apiKeyEl.value = "";
+  dm.reasoningEffort.value = p.reasoningEffort || "";
+});
+
+async function load() {
+  try {
+    const r = await fetch(API_SETTINGS);
+    if (r.ok) {
+      const d = await r.json();
+      if (d && d.apiUrl !== undefined)
+        state.settings = { ...state.settings, ...d };
+    }
+  } catch (e) {}
+
+  let list = [];
+  try {
+    const r = await fetch(API_CONVERSATIONS);
+    if (r.ok) list = await r.json();
+  } catch (e) {}
+
+  if (!list.length) {
+    try {
+      const raw = localStorage.getItem("ai-chat-fallback-v3");
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d.data) {
+          list = [
+            {
+              id: d.data.id,
+              title: d.data.title || "新对话",
+              createdAt: d.data.createdAt || Date.now(),
+              updatedAt: d.data.updatedAt || Date.now(),
+              messageCount: (d.data.messages || []).length,
+            },
+          ];
+        }
+      }
+    } catch (e) {}
+  }
+
+  state.conversations = list.map((m) => ({
+    id: m.id,
+    title: m.title,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+    messageCount: m.messageCount,
+    messages: null,
+    _loaded: false,
+  }));
+
+  if (!state.conversations.length) {
+    const c = addConvLocal();
+    await saveConv(c);
+    state.conversations[0]._loaded = true;
+  }
+
+  const lid = localStorage.getItem("ai-chat-current-id");
+  let targetConv = state.conversations.find((c) => c.id === lid);
+  if (!targetConv) targetConv = state.conversations[0];
+
+  await loadConv(targetConv.id);
+  switchConv(targetConv.id);
+
+  const fbSettings = localStorage.getItem("ai-chat-settings-fb");
+  if (fbSettings) {
+    try {
+      state.settings = { ...state.settings, ...JSON.parse(fbSettings) };
+      saveSettings();
+      localStorage.removeItem("ai-chat-settings-fb");
+    } catch (e) {}
+  }
+}
+
+async function loadConv(id) {
+  const conv = state.conversations.find((c) => c.id === id);
+  if (!conv || conv._loaded) return;
+  try {
+    const r = await fetch(API_CONV + "?id=" + encodeURIComponent(id));
+    if (r.ok) {
+      const d = await r.json();
+      Object.assign(conv, d);
+    }
+  } catch (e) {}
+  conv._loaded = true;
+}
+
+function addConvLocal(title) {
+  const c = {
+    id: "c_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+    title: title || "新对话",
+    messages: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    _loaded: true,
+  };
+  state.conversations.unshift(c);
+  return c;
+}
+
+function addConv(title) {
+  const c = addConvLocal(title);
+  saveConv(c);
+  return c;
+}
+
+function getConv() {
+  return state.conversations.find((c) => c.id === state.currentId) || null;
+}
+
+async function switchConv(id) {
+  if (state.isStreaming) return;
+  const c = state.conversations.find((x) => x.id === id);
+  if (!c) return;
+  state.currentId = id;
+  localStorage.setItem("ai-chat-current-id", id);
+  if (!c._loaded) await loadConv(id);
+  renderAll();
+  scrollEnd();
+}
+
+function delConv(id) {
+  if (state.isStreaming || state.conversations.length <= 1) {
+    toast("至少保留一个对话");
+    return;
+  }
+  const i = state.conversations.findIndex((c) => c.id === id);
+  if (i < 0) return;
+  state.conversations.splice(i, 1);
+  fetch(API_CONV + "?id=" + encodeURIComponent(id), { method: "DELETE" }).catch(
+    () => {},
+  );
+  clearTimeout(convSaveTimers[id]);
+  delete convSaveTimers[id];
+  if (state.currentId === id) {
+    const n = state.conversations[Math.min(i, state.conversations.length - 1)];
+    state.currentId = n.id;
+    localStorage.setItem("ai-chat-current-id", n.id);
+    if (!n._loaded) loadConv(n.id).then(() => renderAll());
+    else renderAll();
+  } else {
+    renderAll();
+  }
+  toast("已删除");
+}
+
+function newChat() {
+  if (state.isStreaming) return;
+  const c = addConv();
+  switchConv(c.id);
+  renderAll();
+  dm.inputText.focus();
+  clsSidebar();
+}
+
+function delAllChats() {
+  if (state.isStreaming || state.conversations.length === 0) return;
+  if (!confirm("确定清空所有对话？")) return;
+  state.conversations = [];
+  for (const k of Object.keys(convSaveTimers)) {
+    clearTimeout(convSaveTimers[k]);
+    delete convSaveTimers[k];
+  }
+  fetch(API_CONV_CLEAR, { method: "POST" }).catch(() => {});
+  const c = addConv();
+  switchConv(c.id);
+  renderAll();
+  toast("已清空");
+}
+
+function clearMemory() {
+  if (state.isStreaming) return;
+  const c = getConv();
+  if (!c) return;
+  if (!c.memory || (c.memory.shortTerm.length === 0 && c.memory.longTerm.length === 0)) {
+    toast("当前对话无记忆数据");
+    return;
+  }
+  c.memory = { shortTerm: [], longTerm: [], lastMergedRound: 0 };
+  save(c);
+  renderMsgs();
+  toast("记忆已清除");
+}
+
+function mtTitle(convId) {
+  const c = state.conversations.find((x) => x.id === convId);
+  if (!c || !c.messages || !c.messages.length) return;
+  const um = c.messages.find((m) => m.role === "user");
+  if (!um) return;
+  let t = um.content.trim().replace(/\n/g, " ");
+  c.title = t.length > 30 ? t.slice(0, 30) + "..." : t;
+  c.updatedAt = Date.now();
+  saveConv(c);
+  renderAll();
+}
+
+function renderAll() {
+  renderSidebar();
+  renderMsgs();
+  hdrTitle();
+  mdBadge();
+  dm.totalInfo.textContent = state.conversations.length + " 个对话";
+}
+
+function renderSidebar() {
+  const sorted = [...state.conversations].sort(SORT_MODES[state.sortMode].fn);
+  const df = document.createDocumentFragment();
+  sorted.forEach((conv) => {
+    const el = document.createElement("div");
+    el.className =
+      "conversation-item" + (conv.id === state.currentId ? " active" : "");
+    el.dataset.id = conv.id;
+    const ts = new Date(conv.updatedAt || conv.createdAt).toLocaleDateString(
+      "zh-CN",
+      { month: "short", day: "numeric" },
+    );
+    const delDisabled = state.isStreaming ? " disabled" : "";
+    el.innerHTML =
+      '<span class="conv-icon">💬</span><span class="conv-title">' +
+      h(conv.title) +
+      '</span><span class="conv-time">' +
+      ts +
+      '</span><button class="conv-delete" title="删除"' + delDisabled + '>✕</button>';
+    df.appendChild(el);
+  });
+  dm.conversationList.innerHTML = "";
+  dm.conversationList.appendChild(df);
+}
+
+function renderMsgs() {
+  const container = dm.chatContainer;
+  const prevDist = container.scrollHeight - container.scrollTop - container.clientHeight;
+  dm.messagesContainer.querySelectorAll(".message").forEach((m) => m.remove());
+  const conv = getConv(),
+    msgs = conv && conv.messages ? conv.messages : [];
+  if (!msgs.length) {
+    dm.emptyState.style.display = "flex";
+    return;
+  }
+  dm.emptyState.style.display = "none";
+  const df = document.createDocumentFragment();
+  msgs.forEach((msg, i) => {
+    df.appendChild(buildMsg(msg, i, i === msgs.length - 1));
+  });
+  dm.messagesContainer.appendChild(df);
+  container.scrollTop = container.scrollHeight - container.clientHeight - prevDist;
+}
+
+const COLLAPSE_LEN = 500;
+function buildMsg(msg, idx, isLast) {
+  const div = document.createElement("div");
+  div.className =
+    "message " +
+    msg.role +
+    (msg.streaming ? " streaming" : "") +
+    (msg.error ? " error" : "");
+  div.dataset.index = idx;
+  const av = msg.role === "user" ? "U" : msg.role === "assistant" ? "AI" : "!";
+  const rn =
+    msg.role === "user" ? "你" : msg.role === "assistant" ? "AI" : "错误";
+  const content = msg.content || "";
+  const long = !msg.streaming && !isLast && content.length > COLLAPSE_LEN;
+  const actions =
+    msg.role !== "user" && !msg.streaming
+      ? '<div class="message-actions"><button class="btn-msg-action" data-act="continue" title="继续补全">▶️</button><button class="btn-msg-action" data-act="retry" title="重新生成">🔄</button><button class="btn-msg-action" data-act="copy" title="复制">📋</button></div>'
+      : msg.role === "user"
+        ? '<div class="message-actions"><button class="btn-msg-action" data-act="recall" title="撤回">↩️</button><button class="btn-msg-action" data-act="retry-user" title="重新发送">🔄</button><button class="btn-msg-action" data-act="copy" title="复制">📋</button></div>'
+        : "";
+  div.innerHTML =
+    '<div class="message-avatar">' +
+    av +
+    '</div><div class="message-body"><div class="message-header"><span class="message-role">' +
+    rn +
+    '</span><span class="message-time">' +
+    (msg.time || "") +
+    "</span>" +
+    (msg.streaming
+      ? '<span class="status-badge streaming">生成中</span>'
+      : "") +
+    '</div><div class="message-content' +
+    (long ? " collapsed" : "") +
+    '">' +
+    h(content) +
+    "</div>" +
+    (long ? '<div class="expand-bar"><button class="btn-expand">展开全部 ↓</button></div>' : "") +
+    actions +
+    "</div>";
+  // 如果是 AI 回复且存在对应轮次的 STM，附加记忆面板
+  if (msg.role === "assistant" && !msg.streaming && !msg.error) {
+    var _conv = getConv();
+    if (_conv && _conv.memory) {
+      var _round = 0;
+      var _msgs = _conv.messages;
+      for (var _j = 0; _j <= idx; _j++) {
+        if (_msgs[_j].role === "user") _round++;
+      }
+      var _panelHTML = typeof buildMemoryPanelHTML === "function" ? buildMemoryPanelHTML(_conv, _round) : "";
+      if (_panelHTML) {
+        div.querySelector(".message-body").insertAdjacentHTML("beforeend", _panelHTML);
+      }
+    }
+  }
+  return div;
+}
+
+dm.messagesContainer.addEventListener("click", (e) => {
+  const expandBtn = e.target.closest(".btn-expand");
+  if (expandBtn) {
+    e.stopPropagation();
+    const contentEl = expandBtn.closest(".message-body").querySelector(".message-content");
+    if (contentEl.classList.contains("collapsed")) {
+      contentEl.classList.remove("collapsed");
+      expandBtn.textContent = "收起 ↑";
+    } else {
+      contentEl.classList.add("collapsed");
+      expandBtn.textContent = "展开全部 ↓";
+      contentEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    return;
+  }
+  const btn = e.target.closest(".btn-msg-action");
+  if (!btn) return;
+  e.stopPropagation();
+  const msgEl = btn.closest(".message");
+  if (!msgEl) return;
+  const idx = parseInt(msgEl.dataset.index);
+  const act = btn.dataset.act;
+  switch (act) {
+    case "continue":
+      contMsg(idx);
+      break;
+    case "recall":
+      recallMsg(idx);
+      break;
+    case "retry":
+      retryMsg(idx);
+      break;
+    case "retry-user":
+      retryUserMsg(idx);
+      break;
+    case "copy":
+      copyMsg(idx);
+      break;
+  }
+});
+
+dm.conversationList.addEventListener("click", (e) => {
+  const del = e.target.closest(".conv-delete");
+  if (del) {
+    e.stopPropagation();
+    delConv(del.closest(".conversation-item").dataset.id);
+    return;
+  }
+  const item = e.target.closest(".conversation-item");
+  if (!item) return;
+  if (item.dataset.id !== state.currentId) {
+    switchConv(item.dataset.id);
+    clsSidebar();
+  }
+});
+
+function updateMsgContent(idx, content, streaming) {
+  const el = dm.messagesContainer.querySelector(
+    '.message[data-index="' + idx + '"]',
+  );
+  if (!el) return;
+  el.querySelector(".message-content").textContent = content;
+  if (streaming) {
+    el.classList.add("streaming");
+    if (!el.querySelector(".status-badge")) {
+      const b = document.createElement("span");
+      b.className = "status-badge streaming";
+      b.textContent = "生成中";
+      el.querySelector(".message-header").appendChild(b);
+    }
+  } else {
+    el.classList.remove("streaming");
+    const b = el.querySelector(".status-badge");
+    if (b) b.remove();
+  }
+}
+
+function recallMsg(i) {
+  if (state.isStreaming) return;
+  const c = getConv();
+  if (!c) return;
+  c.messages.splice(i, i < c.messages.length - 1 ? 2 : 1);
+  // 清理被撤回轮次对应的记忆数据
+  if (c.memory) {
+    const totalRounds = c.messages.filter(function(m) { return m.role === "user"; }).length;
+    c.memory.shortTerm = c.memory.shortTerm.filter(function(s) { return s.round <= totalRounds; });
+    if (c.memory.lastMergedRound > totalRounds) {
+      c.memory.lastMergedRound = totalRounds;
+      c.memory.longTerm = c.memory.longTerm.filter(function(l) {
+        var parts = l.roundsCovered.split("-");
+        return parseInt(parts[parts.length - 1]) <= totalRounds;
+      });
+    }
+  }
+  c.updatedAt = Date.now();
+  save(c);
+  renderMsgs();
+  hdrTitle();
+  toast("已撤回");
+}
+function retryMsg(i) {
+  if (state.isStreaming) return;
+  const c = getConv();
+  if (!c) return;
+  let ui = -1;
+  for (let j = i - 1; j >= 0; j--) {
+    if (c.messages[j].role === "user") {
+      ui = j;
+      break;
+    }
+  }
+  if (ui >= 0) {
+    const uc = c.messages[ui].content;
+    c.messages.splice(ui);
+    // 清理被移除轮次对应的记忆数据
+    if (c.memory) {
+      var tr2 = c.messages.filter(function(m) { return m.role === "user"; }).length;
+      c.memory.shortTerm = c.memory.shortTerm.filter(function(s) { return s.round <= tr2; });
+      if (c.memory.lastMergedRound > tr2) c.memory.lastMergedRound = tr2;
+      c.memory.longTerm = c.memory.longTerm.filter(function(l) {
+        var parts = l.roundsCovered.split("-");
+        return parseInt(parts[parts.length - 1]) <= tr2;
+      });
+    }
+    c.updatedAt = Date.now();
+    save(c);
+    renderMsgs();
+    sendMsg(uc);
+  }
+}
+function retryUserMsg(i) {
+  if (state.isStreaming) return;
+  const c = getConv();
+  if (!c) return;
+  const uc = c.messages[i].content;
+  c.messages.splice(i);
+  // 清理被移除轮次对应的记忆数据
+  if (c.memory) {
+    var tr3 = c.messages.filter(function(m) { return m.role === "user"; }).length;
+    c.memory.shortTerm = c.memory.shortTerm.filter(function(s) { return s.round <= tr3; });
+    if (c.memory.lastMergedRound > tr3) c.memory.lastMergedRound = tr3;
+    c.memory.longTerm = c.memory.longTerm.filter(function(l) {
+      var parts = l.roundsCovered.split("-");
+      return parseInt(parts[parts.length - 1]) <= tr3;
+    });
+  }
+  c.updatedAt = Date.now();
+  save(c);
+  renderMsgs();
+  sendMsg(uc);
+}
+function contMsg(i) {
+  if (state.isStreaming) return;
+  const c = getConv();
+  if (!c) return;
+  const am = c.messages[i];
+  if (!am || am.role !== "assistant") return;
+  const ll = am.content.trim().split("\n").pop().slice(-60);
+  c.updatedAt = Date.now();
+  save(c);
+  renderMsgs();
+  sendMsg("继续，请直接从「" + ll + "」后面续写完整，不要重复已有内容。");
+}
+function copyMsg(i) {
+  const c = getConv();
+  if (!c) return;
+  const t = c.messages[i].content;
+  navigator.clipboard
+    .writeText(t)
+    .then(() => toast("已复制"))
+    .catch(() => {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      toast("已复制");
+    });
+}
+
+async function sendMsg(content) {
+  if (!content.trim() || state.isStreaming) return;
+  const { apiUrl, apiKey, modelName: model, stream } = state.settings;
+  if (!apiUrl || !apiKey || !model) {
+    toast("请先配置 API 信息");
+    dm.settingsBtn.click();
+    return;
+  }
+  let conv = getConv();
+  if (!conv) return;
+  state.isStreaming = true;
+  renderSidebar();
+  dm.sendBtn.className = "btn-stop";
+  dm.sendBtn.textContent = "■";
+  dm.sendBtn.title = "停止生成";
+  dm.sendBtn.disabled = false;
+  dm.inputText.disabled = true;
+  const time = new Date().toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  let fullContent = content.trim();
+  if (state.uploadedFiles.length) {
+    const fileTexts = state.uploadedFiles.map((f) => "【" + f.name + "】\n" + f.content).join("\n\n");
+    fullContent = fullContent ? fileTexts + "\n\n" + fullContent : fileTexts;
+    state.uploadedFiles = [];
+    dm.uploadedFiles.innerHTML = "";
+  }
+  conv.messages.push({
+    role: "user",
+    content: fullContent,
+    time,
+    id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+  });
+  const first = conv.messages.filter((m) => m.role === "user").length === 1;
+  conv.messages.push({
+    role: "assistant",
+    content: "",
+    time: "",
+    streaming: true,
+    id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+  });
+  conv.updatedAt = Date.now();
+  save(conv);
+  dm.inputText.value = "";
+  resize();
+  renderMsgs();
+  scrollEnd();
+  if (first) mtTitle(conv.id);
+  const aiIdx = conv.messages.length - 1;
+  try {
+    state.abortController = new AbortController();
+    if (stream) await streamCall(model, aiIdx, conv);
+    else await normalCall(model, aiIdx, conv);
+  } catch (err) {
+    const ct =
+      err.name === "AbortError" ? "[已取消]" : err.message || "请求失败";
+    conv.messages[aiIdx] = {
+      ...conv.messages[aiIdx],
+      content: ct,
+      streaming: false,
+      error: err.name !== "AbortError",
+    };
+    if (err.name === "AbortError") toast("已取消");
+    else toast("请求失败: " + err.message);
+    save(conv);
+    renderMsgs();
+  } finally {
+    state.isStreaming = false;
+    renderSidebar();
+    state.abortController = null;
+    dm.sendBtn.className = "btn-send";
+    dm.sendBtn.textContent = "➤";
+    dm.sendBtn.title = "";
+    dm.inputText.disabled = false;
+    // 触发记忆更新（异步，不影响用户体验）
+    var _convForMemory = conv;
+    var _convIdForMemory = conv.id;
+    var _settingsForMemory = { ...state.settings };
+    setTimeout(function() {
+      triggerMemoryUpdate(_convForMemory, _settingsForMemory).then(function() {
+        save(_convForMemory);
+        if (state.currentId === _convIdForMemory) renderMsgs();
+      });
+    }, 500);
+    dm.inputText.focus();
+  }
+}
+
+// 非流式调用链: messages → injectSystemPrompt → buildBody → callLLM → extractContent → formatContent
+async function normalCall(model, aiIdx, conv) {
+  const { apiUrl, apiKey } = state.settings;
+  const chain = pipe(
+    injectSystemPrompt(conv),
+    buildRequestBody(model, false),
+    callLLM(apiUrl, apiKey),
+    extractContent,
+    formatContent
+  );
+  const content = await chain(conv.messages);
+  const time = new Date().toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  conv.messages[aiIdx] = {
+    ...conv.messages[aiIdx],
+    content,
+    streaming: false,
+    time,
+  };
+  conv.updatedAt = Date.now();
+  save(conv);
+  renderMsgs();
+}
+
+// 流式调用: 前半段用 pipe，后半段用异步生成器逐块输出
+async function streamCall(model, aiIdx, conv) {
+  const { apiUrl, apiKey } = state.settings;
+  const prepareBody = pipe(injectSystemPrompt(conv), buildRequestBody(model, true));
+  const body = await prepareBody(conv.messages);
+  const response = await callLLM(apiUrl, apiKey)(body);
+
+  let fc = "";
+  for await (const delta of streamContent(response)) {
+    fc += delta;
+    conv.messages[aiIdx].content = fc;
+    updateMsgContent(aiIdx, fc, true);
+  }
+  const time = new Date().toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  conv.messages[aiIdx] = {
+    ...conv.messages[aiIdx],
+    content: fc,
+    streaming: false,
+    time,
+  };
+  conv.updatedAt = Date.now();
+  save(conv);
+  renderMsgs();
+}
+
+dm.uploadBtn.addEventListener("click", () => dm.fileInput.click());
+dm.fileInput.addEventListener("change", () => {
+  const files = [...dm.fileInput.files];
+  if (!files.length) return;
+  let loaded = 0;
+  files.forEach((f) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.uploadedFiles.push({ name: f.name, content: reader.result });
+      loaded++;
+      if (loaded === files.length) {
+        renderUploadedFiles();
+        dm.sendBtn.disabled = !(dm.inputText.value.trim() || state.uploadedFiles.length);
+        toast("已添加 " + files.length + " 个文件");
+      }
+    };
+    reader.onerror = () => { loaded++; toast("读取失败: " + f.name); };
+    reader.readAsText(f);
+  });
+  dm.fileInput.value = "";
+});
+function renderUploadedFiles() {
+  dm.uploadedFiles.innerHTML = "";
+  if (!state.uploadedFiles.length) return;
+  const df = document.createDocumentFragment();
+  state.uploadedFiles.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "file-chip";
+    chip.dataset.index = i;
+    chip.innerHTML = '<span class="file-name">' + h(f.name) + '</span><button class="file-remove" title="移除">✕</button>';
+    df.appendChild(chip);
+  });
+  dm.uploadedFiles.appendChild(df);
+}
+dm.uploadedFiles.addEventListener("click", (e) => {
+  const btn = e.target.closest(".file-remove");
+  if (!btn) return;
+  const chip = btn.closest(".file-chip");
+  const i = parseInt(chip.dataset.index);
+  state.uploadedFiles.splice(i, 1);
+  renderUploadedFiles();
+  dm.sendBtn.disabled = !(dm.inputText.value.trim() || state.uploadedFiles.length);
+});
+dm.inputText.addEventListener("input", () => {
+  resize();
+  dm.sendBtn.disabled = !(dm.inputText.value.trim() || state.uploadedFiles.length);
+});
+dm.inputText.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if ((dm.inputText.value.trim() || state.uploadedFiles.length) && !state.isStreaming)
+      sendMsg(dm.inputText.value);
+  }
+});
+dm.sendBtn.addEventListener("click", () => {
+  if (state.isStreaming) {
+    state.abortController && state.abortController.abort();
+    return;
+  }
+  if ((dm.inputText.value.trim() || state.uploadedFiles.length) && !state.isStreaming)
+    sendMsg(dm.inputText.value);
+});
+
+dm.settingsBtn.addEventListener("click", () => {
+  dm.apiUrlEl.value = state.settings.apiUrl || "";
+  dm.apiKeyEl.value = state.settings.apiKey || "";
+  dm.modelNameEl.value = state.settings.modelName || "";
+  dm.streamToggle.checked = state.settings.stream !== false;
+  dm.reasoningEffort.value = state.settings.reasoningEffort || "";
+  dm.tempEl.value = state.settings.temperature || "";
+  dm.maxTokensEl.value = state.settings.maxTokens || "";
+  dm.topPEl.value = state.settings.topP || "";
+  dm.freqPenaltyEl.value = state.settings.frequencyPenalty || "";
+  dm.presPenaltyEl.value = state.settings.presencePenalty || "";
+  const su = state.settings.apiUrl || "";
+  const m = Object.entries(PROVIDERS).find(([, p]) =>
+    su.startsWith(
+      p.url
+        .replace("/v1/chat/completions", "")
+        .replace("/chat/completions", ""),
+    ),
+  );
+  dm.apiProviderEl.value = m ? m[0] : "";
+  dm.settingsModal.classList.add("active");
+});
+function clsSet() {
+  dm.settingsModal.classList.remove("active");
+}
+dm.modalCloseBtn.addEventListener("click", clsSet);
+dm.cancelBtn.addEventListener("click", clsSet);
+dm.settingsModal.addEventListener("click", (e) => {
+  if (e.target === dm.settingsModal) clsSet();
+});
+dm.saveSettingsBtn.addEventListener("click", () => {
+  let u = dm.apiUrlEl.value.trim();
+  if (u && !/\/chat\/completions\/?$/.test(u)) {
+    // 只对没有具体路径的 base URL 自动补全，已有自定义路径的不动
+    const match = u.match(/^https?:\/\/[^\/]+(\/.*)?$/);
+    const path = match ? (match[1] || "") : "";
+    if (!path || /^\/v1\/?$/.test(path)) {
+      u = u.replace(/\/+$/, "");
+      if (!/\/v1$/.test(u)) u += "/v1";
+      u += "/chat/completions";
+      dm.apiUrlEl.value = u;
+    }
+  }
+  state.settings.apiUrl = u;
+  state.settings.apiKey = dm.apiKeyEl.value.trim();
+  state.settings.modelName = dm.modelNameEl.value.trim();
+  state.settings.stream = dm.streamToggle.checked;
+  state.settings.reasoningEffort = dm.reasoningEffort.value;
+  state.settings.temperature = dm.tempEl.value.trim();
+  state.settings.maxTokens = dm.maxTokensEl.value.trim();
+  state.settings.topP = dm.topPEl.value.trim();
+  state.settings.frequencyPenalty = dm.freqPenaltyEl.value.trim();
+  state.settings.presencePenalty = dm.presPenaltyEl.value.trim();
+  saveSettings();
+  clsSet();
+  toast("已保存");
+});
+dm.resetSettingsBtn.addEventListener("click", () => {
+  if (confirm("重置所有设置？")) {
+    dm.apiProviderEl.value = "";
+    dm.apiUrlEl.value = "";
+    dm.apiKeyEl.value = "";
+    dm.modelNameEl.value = "";
+    dm.apiKeyEl.placeholder = "sk-...";
+    dm.streamToggle.checked = true;
+    dm.reasoningEffort.value = "medium";
+    dm.tempEl.value = "";
+    dm.maxTokensEl.value = "";
+    dm.topPEl.value = "";
+    dm.freqPenaltyEl.value = "";
+    dm.presPenaltyEl.value = "";
+    dm.saveSettingsBtn.click();
+    toast("已重置");
+  }
+});
+
+dm.renameBtn.addEventListener("click", () => {
+  const c = getConv();
+  if (!c) return;
+  dm.renameInput.value = c.title;
+  dm.renameModal.classList.add("active");
+  setTimeout(() => dm.renameInput.focus(), 100);
+});
+function clsRen() {
+  dm.renameModal.classList.remove("active");
+}
+dm.renameCloseBtn.addEventListener("click", clsRen);
+dm.renameCancelBtn.addEventListener("click", clsRen);
+dm.renameModal.addEventListener("click", (e) => {
+  if (e.target === dm.renameModal) clsRen();
+});
+dm.renameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    dm.renameSaveBtn.click();
+  }
+  if (e.key === "Escape") clsRen();
+});
+dm.renameSaveBtn.addEventListener("click", () => {
+  const c = getConv();
+  if (!c) return;
+  c.title = dm.renameInput.value.trim() || "新对话";
+  saveConv(c);
+  renderAll();
+  clsRen();
+  toast("已重命名");
+});
+
+dm.sortBtn.addEventListener("click", () => {
+  state.sortMode = (state.sortMode + 1) % SORT_MODES.length;
+  dm.sortBtn.textContent = ["⇅", "↓", "↑", "AZ", "ZA"][state.sortMode];
+  dm.sortBtn.title = SORT_MODES[state.sortMode].label;
+  renderSidebar();
+});
+dm.newChatBtn.addEventListener("click", newChat);
+dm.clearAllBtn.addEventListener("click", delAllChats);
+dm.clearMemoryBtn.addEventListener("click", clearMemory);
+
+function opnSidebar() {
+  dm.sidebar.classList.add("open");
+  dm.sidebarOverlay.classList.add("active");
+}
+function clsSidebar() {
+  dm.sidebar.classList.remove("open");
+  dm.sidebarOverlay.classList.remove("active");
+}
+dm.menuBtn.addEventListener("click", opnSidebar);
+dm.closeSidebarBtn.addEventListener("click", clsSidebar);
+dm.sidebarOverlay.addEventListener("click", clsSidebar);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (dm.settingsModal.classList.contains("active")) clsSet();
+    if (dm.renameModal.classList.contains("active")) clsRen();
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    if ((dm.inputText.value.trim() || state.uploadedFiles.length) && !state.isStreaming)
+      sendMsg(dm.inputText.value);
+  }
+});
+
+load();
+dm.sortBtn.title = SORT_MODES[state.sortMode].label;
+renderAll();
+dm.inputText.focus();
+window.addEventListener("resize", resize);
+</script>
+</body>
+</html>
