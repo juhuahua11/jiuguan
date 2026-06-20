@@ -85,4 +85,19 @@
     <div class="modal-footer"><button class="btn btn-secondary" id="renameCancelBtn">取消</button><button class="btn btn-primary" id="renameSaveBtn">保存</button></div>
   </div>
 </div>
+<div class="modal-overlay" id="illustrateModal">
+  <div class="modal">
+    <div class="modal-header"><h2>🖼 为这章配插图</h2><button class="modal-close" id="illCloseBtn">✕</button></div>
+    <div class="modal-body">
+      <div class="ill-source">
+        <label><input type="radio" name="illSource" value="extract" checked> LLM 提炼画面</label>
+        <label><input type="radio" name="illSource" value="translate"> 原文翻译成提示词</label>
+      </div>
+      <button class="btn btn-secondary" id="illGenPromptBtn" style="margin-bottom:10px">生成提示词</button>
+      <textarea id="illPrompt" rows="4" placeholder="英文提示词（可编辑）"></textarea>
+      <div class="ill-status" id="illStatus"></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" id="illCancelBtn">取消</button><button class="btn btn-primary" id="illConfirmBtn">确认生成插图</button></div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
