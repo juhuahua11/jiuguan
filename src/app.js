@@ -1157,7 +1157,8 @@ dm.illustrateModal.addEventListener("click", (e) => {
 async function genIllPrompt() {
   if (!state.illustrateTarget) return;
   const { convId, msgIdx } = state.illustrateTarget;
-  const mode = document.querySelector('input[name="illSource"]:checked').value;
+  const radio = document.querySelector('input[name="illSource"]:checked');
+  const mode = radio ? radio.value : "extract";
   dm.illStatus.className = "ill-status busy";
   dm.illStatus.innerHTML = '<span class="spinner"></span>生成提示词中…';
   try {
@@ -1198,15 +1199,17 @@ async function confirmIllustrate() {
     // server.js: 成功 200 返回 {illustration:{engine}}（无 ok 字段），
     // 失败 500 返回 {error}（无 ok 字段）。故成功判断只用 r.ok，不能用 d.ok。
     if (!r.ok) throw new Error(d.error || "画图失败");
-    // 更新本地消息
-    const c = getConv();
-    if (c) {
+    // 按 convId 定位对话（异步期间用户可能已切换对话）
+    const c = state.conversations.find((x) => x.id === convId);
+    if (c && c.messages[msgIdx]) {
       c.messages[msgIdx].illustration = {
-        engine: d.illustration.engine, prompt, createdAt: Date.now(),
+        engine: d.illustration?.engine, prompt, createdAt: Date.now(),
       };
       save(c);
     }
-    clsIll();
+    // 直接关闭，绕过 clsIll 的 isIllustrating 守卫（该守卫仅用于阻止用户在生成中手动关闭）
+    dm.illustrateModal.classList.remove("active");
+    state.illustrateTarget = null;
     renderMsgs();
     toast("插图已生成");
   } catch (e) {
