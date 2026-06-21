@@ -495,10 +495,10 @@ const server = http.createServer(async (req, res) => {
       }
 
       // spawn generate.py：--json 让 stdout 只输出 JSON 行，--quiet 抑制引擎日志，
-      // --output-dir 指向 illustrations/，最后位置参数是 prompt。
+      // --output-dir 指向 illustrations/，-- 后是 prompt（防止 prompt 以 - 开头被 argparse 当 flag）。
       const args = ["--json", "--engine", engine,
                     fallback ? "--fallback" : "--no-fallback",
-                    "--output-dir", ILLUSTR_DIR, "--quiet", prompt];
+                    "--output-dir", ILLUSTR_DIR, "--quiet", "--", prompt];
       let result;
       try {
         const out = await runGenerate(args);

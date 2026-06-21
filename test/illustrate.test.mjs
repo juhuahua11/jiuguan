@@ -403,3 +403,49 @@ test("POST /api/illustrate/generate rejects bad inputs", async () => {
     await fs.rm(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test("POST /api/illustrate/generate passes -- separator so dash-prompt is positional", async () => {
+  // 回归：prompt 以 - 开头时，server 必须传 -- 分隔符，否则 argparse 把 prompt 当 flag → 退出码 2。
+  // mock 用 argparse 风格解析：遇到 -- 后下一个元素即 prompt（无论是否以 - 开头）。
+  const { tmpRoot, dataDir } = await makeTmpDataDir();
+  const convDir = path.join(dataDir, "conversations");
+  await fs.mkdir(convDir, { recursive: true });
+  await fs.writeFile(path.join(convDir, "c_dash.json"), JSON.stringify({
+    id: "c_dash", messages: [{ role: "assistant", content: "正文" }],
+  }));
+  const mockAidraw = await makeMockAidraw(
+`const fs=require("fs");const path=require("path");
+const args=process.argv.slice(2);
+let outDir=".";let prompt="MISSED";let afterDash=false;
+for(let i=0;i<args.length;i++){
+  if(afterDash){prompt=args[i];break;}
+  if(args[i]==="--"){afterDash=true;continue;}
+  if(args[i]==="--output-dir"&&args[i+1]){outDir=args[i+1];i++;}
+}
+const f=path.join(outDir,"fake.png");
+fs.writeFileSync(f,Buffer.from([0x89,0x50,0x4e,0x47]));
+process.stdout.write(JSON.stringify({ok:true,file:f,engine:"cloud",receivedPrompt:prompt}));
+`);
+  const proc = spawnServer({
+    JIUGUAN_DATA_DIR: dataDir, PORT: "3194", AIDRAW_DIR: mockAidraw,
+  });
+  try {
+    await waitForPort(3194);
+    const r = await fetch("http://127.0.0.1:3194/api/illustrate/generate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: "c_dash", msgIdx: 0, prompt: "--ar 16:9 cinematic" }),
+    });
+    if (r.status !== 200) {
+      assert.fail("expected 200, got " + r.status + ": " + await r.text());
+    }
+    const body = await r.json();
+    assert.equal(body.illustration.engine, "cloud");
+    // 图写入成功即证明 -- 生效（否则真实 argparse 会退出码 2，server 返回 500）
+    const img = await fs.readFile(path.join(dataDir, "illustrations", "c_dash_0.png"));
+    assert.equal(img[0], 0x89);
+  } finally {
+    await killServer(proc);
+    await fs.rm(tmpRoot, { recursive: true, force: true });
+    await fs.rm(mockAidraw, { recursive: true, force: true });
+  }
+});
