@@ -593,7 +593,10 @@ function buildMsg(msg, idx, isLast) {
     var _convId = _conv ? _conv.id : "";
     var _img = document.createElement("div");
     _img.className = "message-illustration";
-    _img.innerHTML = '<img src="/api/illustration?conv=' + encodeURIComponent(_convId) + '&idx=' + idx + '" loading="lazy" onerror="this.parentNode.innerHTML=\'<span class=\\\'ill-placeholder\\\'>[插图加载失败]</span>\'">';
+    // t=createdAt 作 cache buster：每次重新生成 createdAt 变 → URL 变 → 浏览器重新加载新图，
+    // 避免同 URL 命中缓存显示旧图。图未变时 createdAt 不变，仍可享缓存。
+    var _t = msg.illustration.createdAt || "";
+    _img.innerHTML = '<img src="/api/illustration?conv=' + encodeURIComponent(_convId) + '&idx=' + idx + '&t=' + _t + '" loading="lazy" onerror="this.parentNode.innerHTML=\'<span class=\\\'ill-placeholder\\\'>[插图加载失败]</span>\'">';
     div.querySelector(".message-body").appendChild(_img);
   }
   return div;
