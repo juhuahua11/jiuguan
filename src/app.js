@@ -990,7 +990,18 @@ dm.sendBtn.addEventListener("click", () => {
     sendMsg(dm.inputText.value);
 });
 
-dm.settingsBtn.addEventListener("click", () => {
+dm.settingsBtn.addEventListener("click", async () => {
+  // 拉取 MP 配置填充折叠区
+  try {
+    const r = await fetch("/api/memory/config");
+    if (r.ok) {
+      const cfg = await r.json();
+      document.getElementById("mpEnabled").checked = cfg.enabledModules?.canon !== false;
+      document.getElementById("mpWorkingTokens").value = cfg.workingMemoryTokens || 32000;
+      document.getElementById("mpContinuityEnabled").checked = cfg.continuity?.enabled !== false;
+      document.getElementById("mpExtractionModel").value = cfg.extractionModel || "";
+    }
+  } catch {}
   dm.apiUrlEl.value = state.settings.apiUrl || "";
   dm.apiKeyEl.value = state.settings.apiKey || "";
   dm.modelNameEl.value = state.settings.modelName || "";
@@ -1043,6 +1054,18 @@ dm.saveSettingsBtn.addEventListener("click", () => {
   state.settings.topP = dm.topPEl.value.trim();
   state.settings.frequencyPenalty = dm.freqPenaltyEl.value.trim();
   state.settings.presencePenalty = dm.presPenaltyEl.value.trim();
+  // 提交 MP 配置到 /api/memory/config
+  try {
+    const mpBody = {
+      workingMemoryTokens: parseInt(document.getElementById("mpWorkingTokens").value) || 32000,
+      extractionModel: document.getElementById("mpExtractionModel").value.trim(),
+    };
+    fetch("/api/memory/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mpBody),
+    });
+  } catch {}
   saveSettings();
   clsSet();
   toast("已保存");

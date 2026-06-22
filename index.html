@@ -117,6 +117,14 @@
         <div class="form-group"><label>存在惩罚 <span class="label-desc">0-2</span></label><input type="number" id="presPenaltyEl" placeholder="0" min="0" max="2" step="0.1" /></div>
       </div>
       <div class="form-group"><label>推理深度 <span class="label-desc">DeepSeek V4 专用参数</span></label><select id="reasoningEffort"><option value="">关闭</option><option value="low">低 (low)</option><option value="medium" selected>中 (medium)</option><option value="high">高 (high)</option></select></div>
+      <details class="mp-settings-section">
+        <summary>长期记忆（memory-proxy）</summary>
+        <label>记忆开关 <input type="checkbox" id="mpEnabled" checked></label>
+        <label>工作记忆 tokens <input type="number" id="mpWorkingTokens" value="32000" min="1000" step="1000"></label>
+        <label>连续性开关 <input type="checkbox" id="mpContinuityEnabled" checked></label>
+        <label>抽取模型（留空用聊天模型）<input type="text" id="mpExtractionModel" placeholder="如 deepseek-v4-flash"></label>
+        <p class="mp-hint">高级参数请直接编辑 memory/plugin-config.json</p>
+      </details>
     </div>
     <div class="modal-footer"><button class="btn btn-danger" id="resetSettingsBtn">重置</button><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="saveSettingsBtn">保存</button></div>
   </div>
@@ -1449,7 +1457,18 @@ dm.sendBtn.addEventListener("click", () => {
     sendMsg(dm.inputText.value);
 });
 
-dm.settingsBtn.addEventListener("click", () => {
+dm.settingsBtn.addEventListener("click", async () => {
+  // 拉取 MP 配置填充折叠区
+  try {
+    const r = await fetch("/api/memory/config");
+    if (r.ok) {
+      const cfg = await r.json();
+      document.getElementById("mpEnabled").checked = cfg.enabledModules?.canon !== false;
+      document.getElementById("mpWorkingTokens").value = cfg.workingMemoryTokens || 32000;
+      document.getElementById("mpContinuityEnabled").checked = cfg.continuity?.enabled !== false;
+      document.getElementById("mpExtractionModel").value = cfg.extractionModel || "";
+    }
+  } catch {}
   dm.apiUrlEl.value = state.settings.apiUrl || "";
   dm.apiKeyEl.value = state.settings.apiKey || "";
   dm.modelNameEl.value = state.settings.modelName || "";
@@ -1502,6 +1521,18 @@ dm.saveSettingsBtn.addEventListener("click", () => {
   state.settings.topP = dm.topPEl.value.trim();
   state.settings.frequencyPenalty = dm.freqPenaltyEl.value.trim();
   state.settings.presencePenalty = dm.presPenaltyEl.value.trim();
+  // 提交 MP 配置到 /api/memory/config
+  try {
+    const mpBody = {
+      workingMemoryTokens: parseInt(document.getElementById("mpWorkingTokens").value) || 32000,
+      extractionModel: document.getElementById("mpExtractionModel").value.trim(),
+    };
+    fetch("/api/memory/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mpBody),
+    });
+  } catch {}
   saveSettings();
   clsSet();
   toast("已保存");
