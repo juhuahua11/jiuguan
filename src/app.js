@@ -133,24 +133,22 @@ const buildRequestBody = (model, stream) => (messages) => {
   return body;
 };
 
-// Step 3: 调用大模型 API
+// Step 3: 调用记忆代理 /api/chat（server 端转发给 memory-proxy 大脑 + 上游）
 const callLLM = (url, key) => async (body) => {
-  const r = await fetch(url, {
+  // 注入 chat_id，让大脑按对话隔离记忆 session
+  const conv = getConv();
+  const bodyWithChat = { ...body, chat_id: conv ? conv.id : undefined };
+  const r = await fetch(window.location.origin + "/api/chat", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(url.includes("xiaomimimo")
-        ? { "api-key": key }
-        : { Authorization: "Bearer " + key }),
-    },
-    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(bodyWithChat),
     signal: state.abortController.signal,
   });
   if (!r.ok) {
     let em = "HTTP " + r.status;
     try {
       const ed = await r.json();
-      em = ed.error?.message || em;
+      em = ed.error?.message || ed.error || em;
     } catch (e) {
       try { em = await r.text(); } catch (e2) {}
     }
