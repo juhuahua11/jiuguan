@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 const PLUGIN_DIR = path.join(__dirname); // jiuguan/memory/ — plugin-config.json 与 data/ 落在这
 const CONFIG_PATH = path.join(PLUGIN_DIR, 'plugin-config.json');
@@ -99,9 +100,30 @@ async function init(settings) {
   console.log('[MemoryProxy] brain loaded: handleMemoryRequest ready');
 }
 
-// handleChatRequest 在 Task 3 实现。这里先暴露为函数占位以满足 API 契约。
-function handleChatRequest() {
-  throw new Error('[MemoryProxy] handleChatRequest not implemented yet (Task 3)');
+// ── upstream 头合成 ──
+// 把 jiuguan settings 的 apiUrl 解析成大脑期望的 x-upstream-host/port/path + authorization。
+function _buildUpstreamHeaders(body, settings) {
+  const apiUrl = (settings.apiUrl || '').replace(/^https?:\/\//, '');
+  // apiUrl 形如 api.deepseek.com/v1/chat/completions
+  const slashIdx = apiUrl.indexOf('/');
+  const host = slashIdx >= 0 ? apiUrl.slice(0, slashIdx) : apiUrl;
+  const reqPath = slashIdx >= 0 ? apiUrl.slice(slashIdx) : '/chat/completions';
+  const headers = {
+    'authorization': 'Bearer ' + (settings.apiKey || ''),
+    'x-upstream-host': host,
+    'x-upstream-port': '443',
+    'x-upstream-path': reqPath,
+  };
+  return headers;
+}
+
+// ── 主入口：转发给大脑 ──
+async function handleChatRequest(body, settings) {
+  if (!initialized) await init(settings);
+  const headers = _buildUpstreamHeaders(body, settings);
+  const upstreamAgent = new https.Agent({ keepAlive: true });
+  // 大脑签名：handleMemoryRequest(body, headers, pluginDir, upstreamAgent)
+  return brain.handleMemoryRequest(body, headers, PLUGIN_DIR, upstreamAgent);
 }
 
 // 模块加载即打补丁，确保任何 [MemoryProxy] 日志都能被捕获（即使 init 未调用）
@@ -113,6 +135,7 @@ module.exports = {
   getLogsSince,
   getConfig,
   saveConfig,
+  _buildUpstreamHeaders,
+  handleChatRequest,
   PLUGIN_DIR,
-  handleChatRequest, // Task 3 实现
 };
