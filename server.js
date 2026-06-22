@@ -695,6 +695,31 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (basePath === "/api/memory/log" && method === "GET") {
+      const since = parseInt(query.since || "0", 10);
+      const limit = Math.min(parseInt(query.limit || "500", 10), 2000);
+      const logs = memoryAdapter.getLogsSince(since).slice(-limit);
+      sendJSON(res, 200, { logs });
+      return;
+    }
+
+    if (basePath === "/api/memory/config" && method === "GET") {
+      sendJSON(res, 200, memoryAdapter.getConfig());
+      return;
+    }
+
+    if (basePath === "/api/memory/config" && method === "POST") {
+      const body = await parseBody(req);
+      // 只允许白名单字段，避免覆盖结构
+      const allowed = {};
+      for (const k of ["workingMemoryTokens", "extractionModel", "extractionApiKey", "continuity", "handoff", "extraction", "enabledModules"]) {
+        if (body[k] !== undefined) allowed[k] = body[k];
+      }
+      const merged = memoryAdapter.saveConfig(allowed);
+      sendJSON(res, 200, { ok: true, config: merged });
+      return;
+    }
+
     if (url === "/favicon.ico") {
       res.writeHead(204);
       res.end();
