@@ -6,6 +6,7 @@ const os = require("os");
 const zlib = require("zlib");
 const crypto = require("crypto");
 const { spawn, execSync } = require("child_process");
+const memoryAdapter = require("./memory/adapter.js");
 
 // ── .env 加载 ──
 // NOTE: 必须在读取 PORT / JIUGUAN_DATA_DIR 等配置之前调用，否则 .env 默认值不会生效
@@ -280,6 +281,64 @@ async function sendStatic(res, filePath, contentType) {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("404");
   }
+}
+
+// 把大脑返回的 ReadableStream body 作为 SSE 透传给客户端 res。
+// 带空闲超时（90s 无 chunk 视为挂死，释放连接）与客户端断开取消。
+function pipeSSEStream(res, streamBody, status, headers) {
+  res.writeHead(status, headers);
+  const reader = streamBody.getReader();
+  const decoder = new TextDecoder();
+  let idleTimer = null;
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      console.error("[MemoryProxy] stream idle >90s, aborting");
+      try { reader.cancel(); } catch {}
+    }, 90000);
+  };
+  const onClientClose = () => { try { reader.cancel(); } catch {} };
+  res.on("close", onClientClose);
+  res.on("error", onClientClose);
+  (async () => {
+    armIdle();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        if (!res.writableEnded) {
+          if (!res.write(chunk)) await new Promise(r => res.once("drain", r));
+        }
+        if (idleTimer) clearTimeout(idleTimer);
+        armIdle();
+      }
+      const tail = decoder.decode();
+      if (tail && !res.writableEnded) res.write(tail);
+    } catch (e) {
+      console.error("[MemoryProxy] stream pipe error:", e?.message || e);
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      res.removeListener("close", onClientClose);
+      res.removeListener("error", onClientClose);
+      if (!res.writableEnded) res.end();
+    }
+  })();
+}
+
+// 兜底直连：记忆层抛错时用 jiuguan settings 直接转发原始 body 到上游。
+async function directUpstreamFallback(body, settings) {
+  const r = await fetch(settings.apiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(settings.apiUrl.includes("xiaomimimo")
+        ? { "api-key": settings.apiKey }
+        : { Authorization: "Bearer " + settings.apiKey }),
+    },
+    body: JSON.stringify(body),
+  });
+  return r;
 }
 
 const MIME = {
@@ -571,6 +630,67 @@ const server = http.createServer(async (req, res) => {
         res.end(buf);
       } catch {
         sendJSON(res, 404, { error: "Not found" });
+      }
+      return;
+    }
+
+    if (basePath === "/api/chat" && method === "POST") {
+      const body = await parseBody(req);
+      const runtime = await readJSON(SETTINGS_FILE, {});
+      const settings = { ...getEnvDefaults(), ...runtime };
+      if (!settings.apiUrl || !settings.apiKey || !settings.modelName) {
+        sendJSON(res, 503, { error: "未配置 API 信息" });
+        return;
+      }
+      const wantStream = body.stream === true;
+      try {
+        const result = await memoryAdapter.handleChatRequest(body, settings);
+        // 流式：body 是 ReadableStream
+        if (result.body && typeof result.body.getReader === "function") {
+          pipeSSEStream(res, result.body, result.status, result.headers);
+          return;
+        }
+        // 非流式：普通对象
+        const raw = JSON.stringify(result.body);
+        res.writeHead(result.status, {
+          "Content-Type": result.headers["content-type"] || "application/json; charset=utf-8",
+          "Cache-Control": "no-cache",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(raw);
+      } catch (e) {
+        // 关键降级：记忆层同步异常 → 直连上游，保证能聊
+        console.error("[memory] fallback to direct upstream:", e?.message || e);
+        try {
+          const upstreamRes = await directUpstreamFallback(body, settings);
+          if (wantStream && upstreamRes.body) {
+            res.writeHead(upstreamRes.status, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "Access-Control-Allow-Origin": "*",
+            });
+            const reader = upstreamRes.body.getReader();
+            const onClientClose = () => { try { reader.cancel(); } catch {} };
+            res.on("close", onClientClose);
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                res.write(value);
+              }
+            } finally { if (!res.writableEnded) res.end(); }
+          } else {
+            const text = await upstreamRes.text();
+            res.writeHead(upstreamRes.status, {
+              "Content-Type": "application/json; charset=utf-8",
+              "Access-Control-Allow-Origin": "*",
+            });
+            res.end(text);
+          }
+        } catch (e2) {
+          sendJSON(res, 502, { error: "上游不可达: " + (e2?.message || e2) });
+        }
       }
       return;
     }
