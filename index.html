@@ -22,6 +22,22 @@
 .message-illustration{margin-top:10px}
 .message-illustration img{max-width:100%;border-radius:var(--radius-sm);display:block}
 .message-illustration .ill-placeholder{color:var(--text-muted);font-size:13px}
+.mem-console { position: fixed; bottom: 0; left: 0; right: 0; height: 220px;
+  background: #1e1e1e; color: #ddd; font-family: monospace; font-size: 12px;
+  border-top: 2px solid #444; z-index: 1000; display: flex; flex-direction: column;
+  transition: height 0.2s; }
+.mem-console.collapsed { height: 28px; }
+.mem-console-bar { display: flex; align-items: center; gap: 12px; padding: 4px 10px;
+  background: #2a2a2a; border-bottom: 1px solid #444; cursor: pointer; }
+.mem-console-title { font-weight: bold; }
+.mem-console-filters { display: flex; gap: 8px; margin-left: auto; font-size: 11px; }
+.mem-console-filters label { cursor: pointer; }
+.mem-console-toggle { background: none; border: none; color: #ddd; cursor: pointer; font-size: 14px; }
+.mem-console-body { flex: 1; overflow-y: auto; padding: 4px 10px; line-height: 1.4; }
+.mem-console.collapsed .mem-console-body { display: none; }
+.mem-log-line { white-space: pre-wrap; word-break: break-all; }
+.mem-log-line.warn { color: #ffb86c; }
+.mem-log-line.error { color: #ff5555; }
 </style>
 </head>
 <body>
@@ -128,6 +144,18 @@
   </div>
 </div>
 <div class="toast" id="toast"></div>
+<div id="memConsole" class="mem-console collapsed">
+  <div class="mem-console-bar" id="memConsoleBar">
+    <span class="mem-console-title">记忆控制台</span>
+    <div class="mem-console-filters">
+      <label><input type="checkbox" data-level="info" checked> info</label>
+      <label><input type="checkbox" data-level="warn" checked> warn</label>
+      <label><input type="checkbox" data-level="error" checked> error</label>
+    </div>
+    <button class="mem-console-toggle" id="memConsoleToggle">▲</button>
+  </div>
+  <div class="mem-console-body" id="memConsoleBody"></div>
+</div>
 
 <script>const SYSTEM_PROMPT = `
 ### 文风
@@ -1660,6 +1688,55 @@ dm.sortBtn.title = SORT_MODES[state.sortMode].label;
 renderAll();
 dm.inputText.focus();
 window.addEventListener("resize", resize);
+
+// ── 记忆控制台 drawer ──
+(function memConsole() {
+  const root = document.getElementById("memConsole");
+  const bar = document.getElementById("memConsoleBar");
+  const body = document.getElementById("memConsoleBody");
+  const toggle = document.getElementById("memConsoleToggle");
+  if (!root || !bar || !body || !toggle) return;
+  let polling = false;
+  let sinceTs = 0;
+  let timer = null;
+  let filters = { info: true, warn: true, error: true };
+  const updateFilters = () => {
+    document.querySelectorAll(".mem-console-filters input").forEach(c => {
+      filters[c.dataset.level] = c.checked;
+    });
+  };
+  document.querySelectorAll(".mem-console-filters input").forEach(c =>
+    c.addEventListener("change", () => { updateFilters(); })
+  );
+  async function poll() {
+    if (!polling) return;
+    try {
+      const r = await fetch("/api/memory/log?since=" + sinceTs + "&limit=200");
+      if (r.ok) {
+        const d = await r.json();
+        (d.logs || []).forEach(l => {
+          if (!filters[l.level]) return;
+          const div = document.createElement("div");
+          div.className = "mem-log-line " + l.level;
+          const time = new Date(l.ts).toLocaleTimeString("zh-CN", { hour12: false });
+          div.textContent = "[" + time + "] " + l.text;
+          body.appendChild(div);
+          sinceTs = Math.max(sinceTs, l.ts);
+        });
+        while (body.childNodes.length > 500) body.removeChild(body.firstChild);
+        body.scrollTop = body.scrollHeight;
+      }
+    } catch {}
+    if (polling) timer = setTimeout(poll, 2000);
+  }
+  bar.addEventListener("click", (e) => {
+    if (e.target.tagName === "INPUT" || e.target === toggle) return;
+    const collapsed = root.classList.toggle("collapsed");
+    toggle.textContent = collapsed ? "▲" : "▼";
+    if (collapsed) { polling = false; if (timer) clearTimeout(timer); }
+    else { polling = true; poll(); }
+  });
+})();
 </script>
 </body>
 </html>

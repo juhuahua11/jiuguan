@@ -1229,3 +1229,52 @@ dm.sortBtn.title = SORT_MODES[state.sortMode].label;
 renderAll();
 dm.inputText.focus();
 window.addEventListener("resize", resize);
+
+// ── 记忆控制台 drawer ──
+(function memConsole() {
+  const root = document.getElementById("memConsole");
+  const bar = document.getElementById("memConsoleBar");
+  const body = document.getElementById("memConsoleBody");
+  const toggle = document.getElementById("memConsoleToggle");
+  if (!root || !bar || !body || !toggle) return;
+  let polling = false;
+  let sinceTs = 0;
+  let timer = null;
+  let filters = { info: true, warn: true, error: true };
+  const updateFilters = () => {
+    document.querySelectorAll(".mem-console-filters input").forEach(c => {
+      filters[c.dataset.level] = c.checked;
+    });
+  };
+  document.querySelectorAll(".mem-console-filters input").forEach(c =>
+    c.addEventListener("change", () => { updateFilters(); })
+  );
+  async function poll() {
+    if (!polling) return;
+    try {
+      const r = await fetch("/api/memory/log?since=" + sinceTs + "&limit=200");
+      if (r.ok) {
+        const d = await r.json();
+        (d.logs || []).forEach(l => {
+          if (!filters[l.level]) return;
+          const div = document.createElement("div");
+          div.className = "mem-log-line " + l.level;
+          const time = new Date(l.ts).toLocaleTimeString("zh-CN", { hour12: false });
+          div.textContent = "[" + time + "] " + l.text;
+          body.appendChild(div);
+          sinceTs = Math.max(sinceTs, l.ts);
+        });
+        while (body.childNodes.length > 500) body.removeChild(body.firstChild);
+        body.scrollTop = body.scrollHeight;
+      }
+    } catch {}
+    if (polling) timer = setTimeout(poll, 2000);
+  }
+  bar.addEventListener("click", (e) => {
+    if (e.target.tagName === "INPUT" || e.target === toggle) return;
+    const collapsed = root.classList.toggle("collapsed");
+    toggle.textContent = collapsed ? "▲" : "▼";
+    if (collapsed) { polling = false; if (timer) clearTimeout(timer); }
+    else { polling = true; poll(); }
+  });
+})();
