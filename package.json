@@ -1,0 +1,14 @@
+{
+  "name": "jiuguan",
+  "version": "1.0.0",
+  "description": "AI chat / novel generation web app with memory-proxy long-term memory",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "memory-proxy-plugin": "file:./memory-proxy-plugin",
+    "tsx": "^4.16.0"
+  }
+}

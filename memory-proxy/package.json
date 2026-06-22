@@ -1,0 +1,37 @@
+{
+  "name": "memory-proxy",
+  "version": "0.2.0",
+  "description": "Long-term context management middleware for LLM frontends",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "setup": "tsx src/setup.ts",
+    "start:deepseek": "tsx src/setup.ts --preset deepseek --launch",
+    "start:mimo": "tsx src/setup.ts --preset mimo --launch",
+    "start:openai": "tsx src/setup.ts --preset openai --launch",
+    "start:claude": "tsx src/setup.ts --preset claude --launch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.26.0",
+    "@fastify/http-proxy": "^9.5.0",
+    "chromadb": "^1.8.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.0",
+    "openai": "^4.52.0",
+    "sql.js": "^1.14.1",
+    "tiktoken": "^1.0.15",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/sql.js": "^1.4.11",
+    "@types/uuid": "^9.0.8",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0"
+  }
+}

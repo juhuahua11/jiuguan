@@ -1,0 +1,11 @@
+{
+    "display_name": "Memory Proxy Bridge",
+    "loading_order": 0,
+    "requires": [],
+    "js": "index.js",
+    "author": "Memory Proxy Plugin",
+    "version": "1.0.0",
+    "hooks": {
+        "activate": "init"
+    }
+}

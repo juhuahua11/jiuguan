@@ -1,0 +1,17 @@
+# Real config (contains secrets like extractionApiKey) — use plugin-config.example.json as template
+plugin-config.json
+
+# TLS certs (generated per-install, never commit)
+*.pem
+
+# Runtime memory DB
+data/
+
+# Installed deps
+node_modules/
+
+# Stray accidental install target (see scripts/install-to-st.js argv validation)
+--help/
+
+# Build output
+dist/

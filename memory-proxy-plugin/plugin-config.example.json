@@ -1,0 +1,40 @@
+{
+  "_comment": "Copy to plugin-config.json and fill in. plugin-config.json is gitignored. extractionApiKey can also be set via the MEMPROXY_EXTRACTION_API_KEY env var.",
+  "workingMemoryTokens": 32000,
+  "enabledModules": {
+    "canon": true,
+    "currentState": true,
+    "facts": true,
+    "events": true,
+    "relationships": true,
+    "graph": true,
+    "summaries": true
+  },
+  "extractionModel": "deepseek-chat",
+  "extractionApiKey": "",
+  "extraction": {
+    "maxInputTokens": 64000,
+    "overlapMessages": 5,
+    "fallbackMessageCount": 50
+  },
+  "continuity": {
+    "enabled": true,
+    "snapshotDetail": "full",
+    "normalMaxTokens": 800,
+    "compactMaxTokens": 1200,
+    "mediumMaxTokens": 1800,
+    "fullMaxTokens": 3000,
+    "refreshEveryTurns": 5
+  },
+  "handoff": {
+    "enabled": true,
+    "triggerOnModelSwitch": true,
+    "manualRefreshEnabled": true,
+    "boostTurns": 20,
+    "fullTurns": 3,
+    "mediumTurns": 7
+  },
+  "debug": {
+    "injectionTrace": false
+  }
+}
