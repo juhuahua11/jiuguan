@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "memory-proxy": ["./memory-proxy/src/index.ts"],
+      "memory-proxy/*": ["./memory-proxy/src/*"]
+    }
+  }
+}

@@ -63,6 +63,15 @@
 
 5. **`jiuguan/package.json`**（新建；jiuguan 原本无 package.json，是纯 Node 脚本项目）：声明 `tsx` 与 `"memory-proxy-plugin": "file:./memory-proxy-plugin"`（连带引入 `memory-proxy`）依赖，`start` 脚本保持 `node server.js`。
 
+6. **`jiuguan/tsconfig.json`**（新建）—— **adapter 可行性的前提**。plugin 源码用 `require('memory-proxy/storage/db')` 等裸包子路径，但 `memory-proxy` 的 package.json 无 `exports`/`main` 且源文件是 `.ts`，Node 原生解析不到。在 ST 里靠 plugin 自己的 `tsconfig.json` `paths` 映射，但 tsx register 对从不同目录发起的 require 解析不一致。**根 tsconfig.json 的 `paths`**（`{ "memory-proxy": ["./memory-proxy/src/index.ts"], "memory-proxy/*": ["./memory-proxy/src/*"] }`）对所有 require 路径统一生效，已验证能加载 `handleMemoryRequest` + 完整 import 链。adapter 加载大脑前 `require('tsx/cjs')` 注册，tsx 自动发现根 tsconfig。memory-proxy 与 plugin 两份源码零改动。
+
+### 2.2.1 已验证的运行时事实
+
+- `require('tsx/cjs')` + `require('./memory-proxy-plugin/src/server/memory-handler.ts')` 成功导出 `handleMemoryRequest`（function）、`notifyChatId`（function）。
+- `require('memory-proxy/storage/db')`、`memory-proxy/session/session-manager`、`memory-proxy/memory/memory-manager` 等子路径经根 tsconfig paths 全部解析到 `.ts` 源。
+- `chromadb` 在 memory-proxy/src 与 plugin/src 源码中**完全未被 import**，是 memory-proxy package.json 的死依赖（可选清理，记为 todo，不在本期）。
+- npm install 共 280 包，含 tiktoken（native binding）、sql.js（wasm）、fastify、selfsigned 等。
+
 ### 2.2.1 两个 mp 的物理布局（方案A）
 
 - `memory-proxy` → `jiuguan/memory-proxy`，`memory-proxy-plugin` → `jiuguan/memory-proxy-plugin`，**保持平级移入**。
@@ -155,6 +164,7 @@ server.js 启动时 monkey-patch `console.log/error/warn`，仅捕获 `[MemoryPr
 | `jiuguan/src/body.html` | 改（drawer + settings 折叠区 DOM） |
 | `jiuguan/src/style.css` | 改（drawer + 折叠区样式） |
 | `jiuguan/package.json` | 新建（jiuguan 原本无） |
+| `jiuguan/tsconfig.json` | 新建（paths 映射 memory-proxy/* → .ts，adapter 前提） |
 | `jiuguan/.gitignore` | 改（补 node_modules/） |
 | `jiuguan/test/memory-adapter.test.mjs` | 新增 |
 | `jiuguan/build.js` | 可能改（若新前端文件需纳入打包） |
