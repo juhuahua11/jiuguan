@@ -1,0 +1,39 @@
+{
+  "workingMemoryTokens": 32000,
+  "enabledModules": {
+    "canon": true,
+    "currentState": true,
+    "facts": true,
+    "events": true,
+    "relationships": true,
+    "graph": true,
+    "summaries": true
+  },
+  "extractionModel": "",
+  "extractionApiKey": "",
+  "extraction": {
+    "maxInputTokens": 64000,
+    "overlapMessages": 5,
+    "fallbackMessageCount": 50
+  },
+  "continuity": {
+    "enabled": true,
+    "snapshotDetail": "full",
+    "normalMaxTokens": 800,
+    "compactMaxTokens": 1200,
+    "mediumMaxTokens": 1800,
+    "fullMaxTokens": 3000,
+    "refreshEveryTurns": 5
+  },
+  "handoff": {
+    "enabled": true,
+    "triggerOnModelSwitch": true,
+    "manualRefreshEnabled": true,
+    "boostTurns": 20,
+    "fullTurns": 3,
+    "mediumTurns": 7
+  },
+  "debug": {
+    "injectionTrace": false
+  }
+}
