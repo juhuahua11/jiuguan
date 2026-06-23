@@ -43,20 +43,26 @@ async function main() {
   assert.strictEqual(captured.body.chat_id, 'c_1');
   console.log('PASS Task3');
 
-  // 4. 端到端 mock：验证 _buildUpstreamHeaders 对不同 apiUrl 的解析
+  // 4. _buildUpstreamHeaders：用 new URL 解析，支持自定义端口/http/query，统一 Bearer
   const adapter3 = require('../memory/adapter.js');
   const h1 = adapter3._buildUpstreamHeaders({}, { apiUrl: 'https://api.deepseek.com/v1/chat/completions', apiKey: 'k1' });
   assert.strictEqual(h1['x-upstream-host'], 'api.deepseek.com');
   assert.strictEqual(h1['x-upstream-path'], '/v1/chat/completions');
   assert.strictEqual(h1['x-upstream-port'], '443');
   assert.strictEqual(h1['authorization'], 'Bearer k1');
-  const h2 = adapter3._buildUpstreamHeaders({}, { apiUrl: 'https://api.xiaomimimo.com/v1/chat/completions', apiKey: 'k2' });
-  assert.strictEqual(h2['x-upstream-host'], 'api.xiaomimimo.com');
-  assert.strictEqual(h2['authorization'], 'Bearer k2');
-  // 无路径的 base url 兜底
-  const h3 = adapter3._buildUpstreamHeaders({}, { apiUrl: 'https://api.deepseek.com', apiKey: 'k3' });
-  assert.strictEqual(h3['x-upstream-host'], 'api.deepseek.com');
-  assert.strictEqual(h3['x-upstream-path'], '/chat/completions');
+  // 自定义端口：端口进 x-upstream-port，host 不含端口
+  const h2 = adapter3._buildUpstreamHeaders({}, { apiUrl: 'https://api.myproxy.com:8443/v1/chat/completions', apiKey: 'k2' });
+  assert.strictEqual(h2['x-upstream-host'], 'api.myproxy.com');
+  assert.strictEqual(h2['x-upstream-port'], '8443');
+  assert.strictEqual(h2['x-upstream-path'], '/v1/chat/completions');
+  // http 本地服务：scheme=http，端口保留
+  const h3 = adapter3._buildUpstreamHeaders({}, { apiUrl: 'http://localhost:1234/v1/chat/completions', apiKey: 'k3' });
+  assert.strictEqual(h3['x-upstream-host'], 'localhost');
+  assert.strictEqual(h3['x-upstream-port'], '1234');
+  // 无路径 base url 兜底 /chat/completions
+  const h4 = adapter3._buildUpstreamHeaders({}, { apiUrl: 'https://api.deepseek.com', apiKey: 'k4' });
+  assert.strictEqual(h4['x-upstream-host'], 'api.deepseek.com');
+  assert.strictEqual(h4['x-upstream-path'], '/chat/completions');
   console.log('PASS Task9');
 }
 main().catch(e => { console.error(e); process.exit(1); });

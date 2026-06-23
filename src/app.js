@@ -148,7 +148,11 @@ const callLLM = (url, key) => async (body) => {
     let em = "HTTP " + r.status;
     try {
       const ed = await r.json();
-      em = ed.error?.message || ed.error || em;
+      const e = ed.error;
+      em = (typeof e === "string") ? e
+        : (e && typeof e === "object" && e.message) ? e.message
+        : (e && typeof e === "object") ? JSON.stringify(e)
+        : em;
     } catch (e) {
       try { em = await r.text(); } catch (e2) {}
     }
@@ -991,17 +995,7 @@ dm.sendBtn.addEventListener("click", () => {
 });
 
 dm.settingsBtn.addEventListener("click", async () => {
-  // 拉取 MP 配置填充折叠区
-  try {
-    const r = await fetch("/api/memory/config");
-    if (r.ok) {
-      const cfg = await r.json();
-      document.getElementById("mpEnabled").checked = cfg.enabledModules?.canon !== false;
-      document.getElementById("mpWorkingTokens").value = cfg.workingMemoryTokens || 32000;
-      document.getElementById("mpContinuityEnabled").checked = cfg.continuity?.enabled !== false;
-      document.getElementById("mpExtractionModel").value = cfg.extractionModel || "";
-    }
-  } catch {}
+  // 先用已有 state 填充并立即打开 modal，MP 折叠区字段异步填充，避免 fetch 阻塞 UI / 失败空白覆盖
   dm.apiUrlEl.value = state.settings.apiUrl || "";
   dm.apiKeyEl.value = state.settings.apiKey || "";
   dm.modelNameEl.value = state.settings.modelName || "";
@@ -1022,6 +1016,18 @@ dm.settingsBtn.addEventListener("click", async () => {
   );
   dm.apiProviderEl.value = m ? m[0] : "";
   dm.settingsModal.classList.add("active");
+  // 异步填充 MP 折叠区（不阻塞 modal 打开；失败保留 HTML 默认值）
+  try {
+    const r = await fetch("/api/memory/config");
+    if (r.ok) {
+      const cfg = await r.json();
+      document.getElementById("mpEnabled").checked = cfg.enabledModules?.canon !== false;
+      const wt = parseInt(cfg.workingMemoryTokens, 10);
+      document.getElementById("mpWorkingTokens").value = Number.isFinite(wt) ? wt : 32000;
+      document.getElementById("mpContinuityEnabled").checked = cfg.continuity?.enabled !== false;
+      document.getElementById("mpExtractionModel").value = cfg.extractionModel || "";
+    }
+  } catch {}
 });
 function clsSet() {
   dm.settingsModal.classList.remove("active");
@@ -1054,11 +1060,14 @@ dm.saveSettingsBtn.addEventListener("click", () => {
   state.settings.topP = dm.topPEl.value.trim();
   state.settings.frequencyPenalty = dm.freqPenaltyEl.value.trim();
   state.settings.presencePenalty = dm.presPenaltyEl.value.trim();
-  // 提交 MP 配置到 /api/memory/config
+  // 提交 MP 配置到 /api/memory/config（开关 + working tokens + 抽取模型）
   try {
+    const wt = parseInt(document.getElementById("mpWorkingTokens").value, 10);
     const mpBody = {
-      workingMemoryTokens: parseInt(document.getElementById("mpWorkingTokens").value) || 32000,
+      workingMemoryTokens: Number.isFinite(wt) ? wt : 32000,
       extractionModel: document.getElementById("mpExtractionModel").value.trim(),
+      enabledModules: { canon: document.getElementById("mpEnabled").checked },
+      continuity: { enabled: document.getElementById("mpContinuityEnabled").checked },
     };
     fetch("/api/memory/config", {
       method: "POST",
@@ -1264,13 +1273,19 @@ window.addEventListener("resize", resize);
   let sinceTs = 0;
   let timer = null;
   let filters = { info: true, warn: true, error: true };
+  const applyFiltersToDom = () => {
+    body.querySelectorAll(".mem-log-line").forEach(el => {
+      el.style.display = filters[el.dataset.level] === false ? "none" : "";
+    });
+  };
   const updateFilters = () => {
     document.querySelectorAll(".mem-console-filters input").forEach(c => {
       filters[c.dataset.level] = c.checked;
     });
+    applyFiltersToDom();
   };
   document.querySelectorAll(".mem-console-filters input").forEach(c =>
-    c.addEventListener("change", () => { updateFilters(); })
+    c.addEventListener("change", updateFilters)
   );
   async function poll() {
     if (!polling) return;
@@ -1279,9 +1294,10 @@ window.addEventListener("resize", resize);
       if (r.ok) {
         const d = await r.json();
         (d.logs || []).forEach(l => {
-          if (!filters[l.level]) return;
           const div = document.createElement("div");
           div.className = "mem-log-line " + l.level;
+          div.dataset.level = l.level;
+          div.style.display = filters[l.level] === false ? "none" : "";
           const time = new Date(l.ts).toLocaleTimeString("zh-CN", { hour12: false });
           div.textContent = "[" + time + "] " + l.text;
           body.appendChild(div);
@@ -1294,7 +1310,8 @@ window.addEventListener("resize", resize);
     if (polling) timer = setTimeout(poll, 2000);
   }
   bar.addEventListener("click", (e) => {
-    if (e.target.tagName === "INPUT" || e.target === toggle) return;
+    // 点 filter 的 input/label/文字只切 filter，不折叠抽屉
+    if (e.target.closest(".mem-console-filters") || e.target === toggle) return;
     const collapsed = root.classList.toggle("collapsed");
     toggle.textContent = collapsed ? "▲" : "▼";
     if (collapsed) { polling = false; if (timer) clearTimeout(timer); }

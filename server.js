@@ -285,11 +285,14 @@ async function sendStatic(res, filePath, contentType) {
 
 // 把大脑返回的 ReadableStream body 作为 SSE 透传给客户端 res。
 // 带空闲超时（90s 无 chunk 视为挂死，释放连接）与客户端断开取消。
+// drain 等待与 client-close 竞争：客户端断开时 res 不再触发 'drain'，
+// 必须由 close 处理器解除 drain 等待，否则 finally 永不执行 → res.end 不调用 → TCP 泄漏。
 function pipeSSEStream(res, streamBody, status, headers) {
   res.writeHead(status, headers);
   const reader = streamBody.getReader();
   const decoder = new TextDecoder();
   let idleTimer = null;
+  let closed = false;
   const armIdle = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
@@ -297,9 +300,21 @@ function pipeSSEStream(res, streamBody, status, headers) {
       try { reader.cancel(); } catch {}
     }, 90000);
   };
-  const onClientClose = () => { try { reader.cancel(); } catch {} };
+  const onClientClose = () => {
+    closed = true;
+    if (idleTimer) clearTimeout(idleTimer);
+    try { reader.cancel(); } catch {}
+  };
   res.on("close", onClientClose);
   res.on("error", onClientClose);
+  // 等待 drain，但若客户端已断开则立即解除，避免永久挂起。
+  const waitForDrain = () => new Promise(resolve => {
+    if (closed || res.destroyed) return resolve();
+    const onDrain = () => { res.off("close", onClose); resolve(); };
+    const onClose = () => { res.off("drain", onDrain); resolve(); };
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+  });
   (async () => {
     armIdle();
     try {
@@ -307,14 +322,14 @@ function pipeSSEStream(res, streamBody, status, headers) {
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
-        if (!res.writableEnded) {
-          if (!res.write(chunk)) await new Promise(r => res.once("drain", r));
+        if (!res.writableEnded && !closed) {
+          if (!res.write(chunk)) await waitForDrain();
         }
         if (idleTimer) clearTimeout(idleTimer);
         armIdle();
       }
       const tail = decoder.decode();
-      if (tail && !res.writableEnded) res.write(tail);
+      if (tail && !res.writableEnded && !closed) res.write(tail);
     } catch (e) {
       console.error("[MemoryProxy] stream pipe error:", e?.message || e);
     } finally {
@@ -327,14 +342,13 @@ function pipeSSEStream(res, streamBody, status, headers) {
 }
 
 // 兜底直连：记忆层抛错时用 jiuguan settings 直接转发原始 body 到上游。
+// jiuguan 只支持 deepseek（Bearer 鉴权）。
 async function directUpstreamFallback(body, settings) {
   const r = await fetch(settings.apiUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(settings.apiUrl.includes("xiaomimimo")
-        ? { "api-key": settings.apiKey }
-        : { Authorization: "Bearer " + settings.apiKey }),
+      Authorization: "Bearer " + settings.apiKey,
     },
     body: JSON.stringify(body),
   });
@@ -663,30 +677,22 @@ const server = http.createServer(async (req, res) => {
         console.error("[memory] fallback to direct upstream:", e?.message || e);
         try {
           const upstreamRes = await directUpstreamFallback(body, settings);
-          if (wantStream && upstreamRes.body) {
+          // 上游非 2xx 或客户端要非流式：原样返回 JSON 错误体，不伪装成 SSE。
+          if (!wantStream || !upstreamRes.ok || !upstreamRes.body) {
+            const text = await upstreamRes.text();
             res.writeHead(upstreamRes.status, {
+              "Content-Type": upstreamRes.headers.get("content-type") || "application/json; charset=utf-8",
+              "Access-Control-Allow-Origin": "*",
+            });
+            res.end(text);
+          } else {
+            // 流式且上游正常：复用 pipeSSEStream（含 idle 超时/背压/断开取消）。
+            pipeSSEStream(res, upstreamRes.body, upstreamRes.status, {
               "Content-Type": "text/event-stream",
               "Cache-Control": "no-cache",
               "Connection": "keep-alive",
               "Access-Control-Allow-Origin": "*",
             });
-            const reader = upstreamRes.body.getReader();
-            const onClientClose = () => { try { reader.cancel(); } catch {} };
-            res.on("close", onClientClose);
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                res.write(value);
-              }
-            } finally { if (!res.writableEnded) res.end(); }
-          } else {
-            const text = await upstreamRes.text();
-            res.writeHead(upstreamRes.status, {
-              "Content-Type": "application/json; charset=utf-8",
-              "Access-Control-Allow-Origin": "*",
-            });
-            res.end(text);
           }
         } catch (e2) {
           sendJSON(res, 502, { error: "上游不可达: " + (e2?.message || e2) });
@@ -696,8 +702,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (basePath === "/api/memory/log" && method === "GET") {
-      const since = parseInt(query.since || "0", 10);
-      const limit = Math.min(parseInt(query.limit || "500", 10), 2000);
+      const sinceRaw = parseInt(query.since || "0", 10);
+      const since = Number.isFinite(sinceRaw) ? sinceRaw : 0;
+      const limitRaw = parseInt(query.limit || "500", 10);
+      const limit = Number.isFinite(limitRaw) ? Math.min(limitRaw, 2000) : 500;
       const logs = memoryAdapter.getLogsSince(since).slice(-limit);
       sendJSON(res, 200, { logs });
       return;

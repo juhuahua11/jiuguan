@@ -70,17 +70,32 @@ function synthesizeCaps(settings) {
 }
 
 // ── 配置读写 ──
+// getConfig: 解析失败时打日志并返回默认值，不静默吞错（避免后续 save 用默认值覆盖损坏文件）。
 function getConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8').replace(/^﻿/, '');
     return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
-  } catch {
+  } catch (e) {
+    console.warn('[MemoryProxy] plugin-config.json parse failed, using defaults:', e?.message || e);
     return { ...DEFAULT_CONFIG };
   }
 }
 
+// 对象字段深合并：部分 POST（如 {continuity:{enabled:false}}）不应覆盖整个 continuity 对象。
+function deepMerge(base, patch) {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])) {
+      out[k] = deepMerge(base[k], v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 function saveConfig(partial) {
-  const merged = { ...getConfig(), ...partial };
+  const merged = deepMerge(getConfig(), partial);
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
   console.log('[MemoryProxy] plugin-config.json updated');
   return merged;
@@ -101,27 +116,31 @@ async function init(settings) {
 }
 
 // ── upstream 头合成 ──
-// 把 jiuguan settings 的 apiUrl 解析成大脑期望的 x-upstream-host/port/path + authorization。
+// 用 new URL 正确解析 apiUrl → host/port/path，避免硬编码 443 导致自定义端口畸形 URL。
+// 大脑读 headers['authorization']（strip 'Bearer ' 后以 Bearer 转发）、x-upstream-host/port/path
+// 拼 https://${host}:${port}${path}。jiuguan 只用 deepseek（https:443），故 scheme 固定 https。
 function _buildUpstreamHeaders(body, settings) {
-  const apiUrl = (settings.apiUrl || '').replace(/^https?:\/\//, '');
-  // apiUrl 形如 api.deepseek.com/v1/chat/completions
-  const slashIdx = apiUrl.indexOf('/');
-  const host = slashIdx >= 0 ? apiUrl.slice(0, slashIdx) : apiUrl;
-  const reqPath = slashIdx >= 0 ? apiUrl.slice(slashIdx) : '/chat/completions';
-  const headers = {
+  let u;
+  try { u = new URL(settings.apiUrl || ''); }
+  catch { u = new URL('https://api.deepseek.com'); }
+  const host = u.hostname;
+  const port = u.port || (u.protocol === 'http:' ? '80' : '443');
+  const reqPath = (u.pathname && u.pathname !== '/' ? u.pathname : '') + (u.search || '') || '/chat/completions';
+  return {
     'authorization': 'Bearer ' + (settings.apiKey || ''),
     'x-upstream-host': host,
-    'x-upstream-port': '443',
+    'x-upstream-port': port,
     'x-upstream-path': reqPath,
   };
-  return headers;
 }
+
+// 模块级复用 agent：keepAlive 池跨请求复用，避免每请求新建导致 socket 泄漏。
+const upstreamAgent = new https.Agent({ keepAlive: true, maxSockets: 32 });
 
 // ── 主入口：转发给大脑 ──
 async function handleChatRequest(body, settings) {
   if (!initialized) await init(settings);
   const headers = _buildUpstreamHeaders(body, settings);
-  const upstreamAgent = new https.Agent({ keepAlive: true });
   // 大脑签名：handleMemoryRequest(body, headers, pluginDir, upstreamAgent)
   return brain.handleMemoryRequest(body, headers, PLUGIN_DIR, upstreamAgent);
 }
