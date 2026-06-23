@@ -687,24 +687,24 @@ function scheduleExtraction(
       const content = typeof responseData === 'string'
         ? extractStreamContent(responseData)
         : extractResponseContent(responseData);
-      // Cap per-message length fed to extraction. jiuguan lets users attach whole files
-      // (e.g. a 500k-char novel) as a user message — that reference material is not
-      // dialogue to extract from, but it ballooned extraction prompts (503k chars →
-      // 46s/extract, hash-mismatch re-extracts). Replace overlong message bodies with a
-      // truncation marker so extraction stays bounded. Fingerprints/integrity-hash still
-      // use the original requestMessages (computed below), so this only affects the
-      // extraction LLM input, not session identity or incremental tracking.
-      const EXTRACTION_MAX_MSG_CHARS = 8000;
-      const capForExtraction = (msg: ChatMessage): ChatMessage => {
+      // Exclude overlong reference material (e.g. a 500k-char novel attached as a user
+      // message) from extraction entirely. Such a message is world-book/setting anchor
+      // for the CHAT forward (kept verbatim in finalMessages), not dialogue to extract
+      // from — including it (even truncated) ballooned extraction prompts and triggered
+      // hash-mismatch re-extracts. Replace with a short placeholder so the message
+      // boundary stays intact for fingerprint/diff logic, but no novel text reaches the
+      // extraction LLM. Fingerprints/integrity-hash use the original requestMessages
+      // (computed below), so session identity and incremental tracking are unaffected.
+      const EXTRACTION_REF_MAX_CHARS = 8000;
+      const maskReferenceForExtraction = (msg: ChatMessage): ChatMessage => {
         const c = msg.content || '';
-        if (c.length <= EXTRACTION_MAX_MSG_CHARS) return msg;
+        if (c.length <= EXTRACTION_REF_MAX_CHARS) return msg;
         return {
           role: msg.role,
-          content: c.slice(0, EXTRACTION_MAX_MSG_CHARS) +
-            `\n[…参考材料已省略 ${c.length - EXTRACTION_MAX_MSG_CHARS} 字符，未参与记忆抽取…]`,
+          content: `[参考材料/世界书，${c.length} 字符，已从记忆抽取中排除]`,
         };
       };
-      const allMessages: ChatMessage[] = [...requestMessages, { role: 'assistant', content }].map(capForExtraction);
+      const allMessages: ChatMessage[] = [...requestMessages, { role: 'assistant', content }].map(maskReferenceForExtraction);
 
       // === Incremental + Chunked Extraction ===
       // 1. 读取上次提取指纹 + 完整性哈希
