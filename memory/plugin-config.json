@@ -1,5 +1,5 @@
 {
-  "workingMemoryTokens": 32000,
+  "workingMemoryTokens": 62000,
   "enabledModules": {
     "canon": true,
     "currentState": true,

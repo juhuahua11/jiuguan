@@ -366,6 +366,7 @@ export async function handleMemoryRequest(
   const stSystemPrompt = systemMsg?.content || '';
   const memoryContent = enriched.find(m => m.role === 'system')?.content || '';
   const nonSystem = enriched.filter(m => m.role !== 'system');
+  // 记忆合并进 system prompt（与独立版 routes.ts 一致），不单独前置消息。
   const combinedSystem = memoryContent
     ? `${stSystemPrompt}\n\n[以下为长期记忆，仅供参考]\n${memoryContent}`
     : stSystemPrompt;
