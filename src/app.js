@@ -768,7 +768,7 @@ function contMsg(i) {
   c.updatedAt = Date.now();
   save(c);
   renderMsgs();
-  sendMsg("继续，请直接从「" + ll + "」后面续写完整，不要重复已有内容。");
+  sendMsg("继续，请直接从「" + ll + "」后面续写完整，不要重复已有内容。续写完正文后，仍需按格式输出【下一步剧情发展推荐选项】的四个选项（A/B/C/D）。");
 }
 function copyMsg(i) {
   const c = getConv();
