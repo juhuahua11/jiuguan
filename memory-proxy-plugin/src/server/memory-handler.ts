@@ -356,29 +356,23 @@ export async function handleMemoryRequest(
     });
   }
 
-  // 8. Assemble final messages: stable system prompt + history + memory before latest user
+  // 8. Assemble final messages: merge memory INTO the system prompt (not a separate
+  //    message before the user). The separate-message placement was a MiMo prefix-cache
+  //    optimization, but it shifts model recency-bias onto the memory instruction and
+  //    away from the system prompt's output-format template (e.g. jiuguan's chapter +
+  //    options template), causing the model to drop the format. Merging matches the
+  //    standalone server (routes.ts) and keeps the format template as the primary system
+  //    instruction. jiuguan is deepseek-only, so the MiMo cache optimization is moot.
   const stSystemPrompt = systemMsg?.content || '';
   const memoryContent = enriched.find(m => m.role === 'system')?.content || '';
   const nonSystem = enriched.filter(m => m.role !== 'system');
+  const combinedSystem = memoryContent
+    ? `${stSystemPrompt}\n\n[以下为长期记忆，仅供参考]\n${memoryContent}`
+    : stSystemPrompt;
   const finalMessages: Array<{ role: string; content: string }> = [
-    { role: 'system', content: stSystemPrompt },
+    { role: 'system', content: combinedSystem },
+    ...nonSystem.map(m => ({ role: m.role, content: m.content })),
   ];
-  if (memoryContent) {
-    // Inject memory as a separate message right before the last user message.
-    // This keeps the system prompt stable for prefix caching (MiMo hits cache),
-    // while placing memory near the user's question for high attention weight.
-    let lastUserIdx = -1;
-    for (let i = nonSystem.length - 1; i >= 0; i--) {
-      if (nonSystem[i].role === 'user') { lastUserIdx = i; break; }
-    }
-    const before = lastUserIdx >= 0 ? nonSystem.slice(0, lastUserIdx) : nonSystem;
-    const after = lastUserIdx >= 0 ? nonSystem.slice(lastUserIdx) : [];
-    finalMessages.push(...before.map(m => ({ role: m.role, content: m.content })));
-    finalMessages.push({ role: 'system', content: `[以下为长期记忆，仅供参考]\n${memoryContent}` });
-    finalMessages.push(...after.map(m => ({ role: m.role, content: m.content })));
-  } else {
-    finalMessages.push(...nonSystem.map(m => ({ role: m.role, content: m.content })));
-  }
 
   // 9. Forward to real upstream API
   const wantStream = body.stream === true;
