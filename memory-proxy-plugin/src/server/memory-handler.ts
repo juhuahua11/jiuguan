@@ -686,7 +686,24 @@ function scheduleExtraction(
       const content = typeof responseData === 'string'
         ? extractStreamContent(responseData)
         : extractResponseContent(responseData);
-      const allMessages: ChatMessage[] = [...requestMessages, { role: 'assistant', content }];
+      // Cap per-message length fed to extraction. jiuguan lets users attach whole files
+      // (e.g. a 500k-char novel) as a user message — that reference material is not
+      // dialogue to extract from, but it ballooned extraction prompts (503k chars →
+      // 46s/extract, hash-mismatch re-extracts). Replace overlong message bodies with a
+      // truncation marker so extraction stays bounded. Fingerprints/integrity-hash still
+      // use the original requestMessages (computed below), so this only affects the
+      // extraction LLM input, not session identity or incremental tracking.
+      const EXTRACTION_MAX_MSG_CHARS = 8000;
+      const capForExtraction = (msg: ChatMessage): ChatMessage => {
+        const c = msg.content || '';
+        if (c.length <= EXTRACTION_MAX_MSG_CHARS) return msg;
+        return {
+          role: msg.role,
+          content: c.slice(0, EXTRACTION_MAX_MSG_CHARS) +
+            `\n[…参考材料已省略 ${c.length - EXTRACTION_MAX_MSG_CHARS} 字符，未参与记忆抽取…]`,
+        };
+      };
+      const allMessages: ChatMessage[] = [...requestMessages, { role: 'assistant', content }].map(capForExtraction);
 
       // === Incremental + Chunked Extraction ===
       // 1. 读取上次提取指纹 + 完整性哈希
