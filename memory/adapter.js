@@ -107,14 +107,17 @@ function saveConfig(partial) {
   return merged;
 }
 
-// ── jiuguan Prompt Compiler v2 ──
-// v2 目标：
+// ── jiuguan Prompt Compiler v3 ──
+// v3 目标：
 // 1) LEVEL 0 输出格式硬锁；
 // 2) 用户上传的整本小说/世界书降级为有限预算 reference；
-// 3) 给后续 watchdog / 调试提供输出格式校验函数；
+// 3) 对非流式结果做自动格式补丁，对流式结果做尾部 SSE 补丁；
 // 4) 不改 memory-proxy core 协议，保持现有聊天链路稳定。
-const PROMPT_COMPILER_MARK = '[JIUGUAN_PROMPT_COMPILER_V2]';
-const LEGACY_PROMPT_COMPILER_MARK = '[JIUGUAN_PROMPT_COMPILER_V1]';
+const PROMPT_COMPILER_MARK = '[JIUGUAN_PROMPT_COMPILER_V3]';
+const LEGACY_PROMPT_COMPILER_MARKS = [
+  '[JIUGUAN_PROMPT_COMPILER_V1]',
+  '[JIUGUAN_PROMPT_COMPILER_V2]',
+];
 const WORLD_REFERENCE_MARK = '[LEVEL 1 - WORLD BOOK / UPLOADED REFERENCE ONLY]';
 
 const PROMPT_BUDGET = {
@@ -123,6 +126,11 @@ const PROMPT_BUDGET = {
   worldbookMaxChars: readPositiveIntEnv('JIUGUAN_WORLDBOOK_MAX_CHARS', 48000, 8000),
   // 保留头部和尾部：头部通常有世界观、角色表，尾部通常贴近当前进度。
   worldbookHeadRatio: 0.55,
+};
+
+const WATCHDOG_CONFIG = {
+  // 默认启用。设为 JIUGUAN_OUTPUT_WATCHDOG=false 可关闭。
+  enabled: process.env.JIUGUAN_OUTPUT_WATCHDOG !== 'false',
 };
 
 const HARD_OUTPUT_CONTRACT = `
@@ -167,7 +175,13 @@ function readPositiveIntEnv(name, fallback, minValue) {
 function compileSystemPrompt(original) {
   const base = String(original || '').trim();
   if (base.includes(PROMPT_COMPILER_MARK)) return base;
-  const cleanBase = base.replace(HARD_OUTPUT_CONTRACT.trim(), '').replace(FINAL_OUTPUT_CHECK.trim(), '').replace(LEGACY_PROMPT_COMPILER_MARK, '').trim();
+  let cleanBase = base
+    .replace(HARD_OUTPUT_CONTRACT.trim(), '')
+    .replace(FINAL_OUTPUT_CHECK.trim(), '')
+    .trim();
+  for (const mark of LEGACY_PROMPT_COMPILER_MARKS) {
+    cleanBase = cleanBase.replace(mark, '').trim();
+  }
   return [
     HARD_OUTPUT_CONTRACT.trim(),
     '[LEVEL 0 - ORIGINAL JIUGUAN WRITING TEMPLATE]',
@@ -197,7 +211,7 @@ function trimWorldbookReference(text, maxChars = PROMPT_BUDGET.worldbookMaxChars
   return {
     text: [
       head,
-      `\n\n[WORLDBOOK TRUNCATED BY JIUGUAN PROMPT COMPILER V2: omitted ${omittedChars} chars from the middle. The omitted part is still part of the source novel, but it must not override LEVEL 0 output format.]\n\n`,
+      `\n\n[WORLDBOOK TRUNCATED BY JIUGUAN PROMPT COMPILER V3: omitted ${omittedChars} chars from the middle. The omitted part is still part of the source novel, but it must not override LEVEL 0 output format.]\n\n`,
       tail,
     ].join(''),
     omittedChars,
@@ -253,6 +267,128 @@ function buildBranchRepairInstruction(currentOutput) {
     '选项 D：...',
     `缺失项：${validation.missingOptions.length ? validation.missingOptions.join(', ') : validation.hasHeader ? '选项结构异常' : '标题与选项结构'}`,
   ].join('\n');
+}
+
+function buildDeterministicBranchPatch(currentOutput) {
+  const validation = validateBranchOutput(currentOutput);
+  if (validation.ok) return '';
+  const needsHeader = !validation.hasHeader;
+  const lines = [];
+  if (needsHeader) lines.push('【下一步剧情发展推荐选项】');
+  const missing = validation.missingOptions.length ? validation.missingOptions : ['A', 'B', 'C', 'D'];
+  const fallback = {
+    A: '沿着当前剧情继续推进，保持人物动机与原有设定一致。',
+    B: '选择更谨慎的路线，优先调查环境、关系或隐藏线索。',
+    C: '尝试打破当前僵局，引入规则、计划或局势变化。',
+    D: '走向更大胆的新展开，让剧情出现意外转折。',
+  };
+  for (const label of missing) {
+    lines.push(`选项 ${label}：${fallback[label]}`);
+  }
+  return lines.join('\n');
+}
+
+function extractChoiceText(body) {
+  return body?.choices?.[0]?.message?.content
+    || body?.choices?.[0]?.delta?.content
+    || '';
+}
+
+function patchNonStreamResult(result) {
+  if (!WATCHDOG_CONFIG.enabled || !result || !result.body || result.body.getReader) return result;
+  const text = extractChoiceText(result.body);
+  if (!text) return result;
+  const validation = validateBranchOutput(text);
+  if (validation.ok) return result;
+  const patch = buildDeterministicBranchPatch(text);
+  if (!patch) return result;
+
+  console.warn('[jiuguan-watchdog] non-stream output failed format check; appended deterministic branch patch');
+  const nextBody = { ...result.body };
+  const choices = Array.isArray(nextBody.choices) ? [...nextBody.choices] : [{ message: { content: text } }];
+  const first = { ...(choices[0] || {}) };
+  first.message = {
+    ...(first.message || {}),
+    content: text.trimEnd() + '\n\n' + patch,
+  };
+  choices[0] = first;
+  nextBody.choices = choices;
+  return { ...result, body: nextBody };
+}
+
+function extractContentFromSSEChunk(chunkText) {
+  let content = '';
+  const lines = String(chunkText || '').split(/\r?\n/);
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t.startsWith('data: ')) continue;
+    const payload = t.slice(6).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const json = JSON.parse(payload);
+      content += json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || '';
+    } catch {}
+  }
+  return content;
+}
+
+function makeSSEDelta(content) {
+  const payload = JSON.stringify({
+    choices: [{ delta: { content } }],
+  });
+  return `data: ${payload}\n\n`;
+}
+
+function patchStreamResult(result) {
+  if (!WATCHDOG_CONFIG.enabled || !result?.body || typeof result.body.getReader !== 'function') return result;
+  const original = result.body;
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const reader = original.getReader();
+  let fullText = '';
+
+  const patchedBody = new ReadableStream({
+    async start(controller) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunkText = decoder.decode(value, { stream: true });
+          fullText += extractContentFromSSEChunk(chunkText);
+          controller.enqueue(value);
+        }
+        const tail = decoder.decode();
+        if (tail) {
+          fullText += extractContentFromSSEChunk(tail);
+          controller.enqueue(encoder.encode(tail));
+        }
+        const validation = validateBranchOutput(fullText);
+        if (!validation.ok && fullText.trim()) {
+          const patch = buildDeterministicBranchPatch(fullText);
+          if (patch) {
+            console.warn('[jiuguan-watchdog] stream output failed format check; appended deterministic branch patch');
+            controller.enqueue(encoder.encode(makeSSEDelta('\n\n' + patch)));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          }
+        }
+      } catch (e) {
+        controller.error(e);
+        return;
+      }
+      controller.close();
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => {});
+    },
+  });
+
+  return { ...result, body: patchedBody };
+}
+
+function applyOutputWatchdog(result) {
+  if (!WATCHDOG_CONFIG.enabled) return result;
+  if (result?.body && typeof result.body.getReader === 'function') return patchStreamResult(result);
+  return patchNonStreamResult(result);
 }
 
 function compileChatBody(body) {
@@ -311,7 +447,8 @@ async function handleChatRequest(body, settings) {
   const compiledBody = compileChatBody(body);
   const headers = _buildUpstreamHeaders(compiledBody, settings);
   // 大脑签名：handleMemoryRequest(body, headers, pluginDir, upstreamAgent)
-  return brain.handleMemoryRequest(compiledBody, headers, PLUGIN_DIR, upstreamAgent);
+  const result = await brain.handleMemoryRequest(compiledBody, headers, PLUGIN_DIR, upstreamAgent);
+  return applyOutputWatchdog(result);
 }
 
 // 模块加载即打补丁，确保任何 [MemoryProxy] 日志都能被捕获（即使 init 未调用）
@@ -329,6 +466,9 @@ module.exports = {
   wrapUploadedReference,
   validateBranchOutput,
   buildBranchRepairInstruction,
+  buildDeterministicBranchPatch,
+  extractContentFromSSEChunk,
+  applyOutputWatchdog,
   compileChatBody,
   handleChatRequest,
   PLUGIN_DIR,
