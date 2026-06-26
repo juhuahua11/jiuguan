@@ -458,9 +458,37 @@ function createSSEContentAccumulator() {
 }
 
 function createSSEPassthroughWithoutDone() {
+  let pending = '';
+  let skipNextBlank = false;
+  const processLines = (lines) => {
+    let out = '';
+    for (const line of lines) {
+      const normalized = line.replace(/\r$/, '');
+      if (normalized.trim() === 'data: [DONE]') {
+        skipNextBlank = true;
+        continue;
+      }
+      if (skipNextBlank && normalized.trim() === '') {
+        skipNextBlank = false;
+        continue;
+      }
+      skipNextBlank = false;
+      out += line + '\n';
+    }
+    return out;
+  };
   return {
-    push() { return ''; },
-    flush() { return ''; },
+    push(chunkText) {
+      pending += String(chunkText || '');
+      const lines = pending.split('\n');
+      pending = lines.pop() || '';
+      return processLines(lines);
+    },
+    flush() {
+      const tail = pending;
+      pending = '';
+      return processLines(tail ? [tail] : []);
+    },
   };
 }
 
@@ -473,12 +501,17 @@ function makeSSEDelta(content) {
   return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
 }
 
+function makeSSEControl(event, payload) {
+  return `data: ${JSON.stringify({ jiuguan: { event, ...payload } })}\n\n`;
+}
+
 function patchStreamResult(result, compiledBody, headers) {
   if (!WATCHDOG_CONFIG.enabled || !result?.body || typeof result.body.getReader !== 'function') return result;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const reader = result.body.getReader();
   const contentAcc = createSSEContentAccumulator();
+  const passthrough = createSSEPassthroughWithoutDone();
   let fullText = '';
 
   const patchedBody = new ReadableStream({
@@ -489,20 +522,25 @@ function patchStreamResult(result, compiledBody, headers) {
           if (done) break;
           const chunkText = decoder.decode(value, { stream: true });
           fullText += contentAcc.push(chunkText);
+          const out = passthrough.push(chunkText);
+          if (out) controller.enqueue(encoder.encode(out));
         }
         const tail = decoder.decode();
-        if (tail) fullText += contentAcc.push(tail);
+        if (tail) {
+          fullText += contentAcc.push(tail);
+          const out = passthrough.push(tail);
+          if (out) controller.enqueue(encoder.encode(out));
+        }
         fullText += contentAcc.flush();
-
-        let finalText = fullText;
+        const rawTail = passthrough.flush();
+        if (rawTail) controller.enqueue(encoder.encode(rawTail));
         if (!validateBranchOutput(fullText).ok && fullText.trim()) {
           const patch = await buildBestBranchPatch(fullText, compiledBody, headers);
           if (patch) {
-            finalText = replaceBranchSection(fullText, patch);
-            console.warn('[jiuguan-watchdog] stream output failed original option-type check; replaced branch section');
+            console.warn('[jiuguan-watchdog] stream output failed original option-type check; sent branch replace event');
+            controller.enqueue(encoder.encode(makeSSEControl('replace_branch', { content: patch })));
           }
         }
-        if (finalText) controller.enqueue(encoder.encode(makeSSEDelta(finalText)));
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       } catch (e) {
         controller.error(e);
