@@ -1,22 +1,23 @@
 // jiuguan ↔ memory-proxy-plugin 大脑的桥梁。
-// 只做：加载大脑 .ts、合成 upstream 头、caps 合成、日志环形缓冲、配置读写。
-// 不含记忆逻辑——大脑全在 memory-proxy-plugin/src/server/memory-handler.ts。
+// 只做加载大脑、合成 upstream 头、caps 合成、日志缓冲、配置读写、prompt 编排与输出兜底。
+// 记忆逻辑仍在 memory-proxy-plugin/src/server/memory-handler.ts。
 
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const vm = require('vm');
 
-const PLUGIN_DIR = path.join(__dirname); // jiuguan/memory/ — plugin-config.json 与 data/ 落在这
+const PLUGIN_DIR = path.join(__dirname);
 const CONFIG_PATH = path.join(PLUGIN_DIR, 'plugin-config.json');
 const CAPS_PATH = path.join(__dirname, '..', 'data', 'memory-caps.json');
+const SYSTEM_PROMPT_SOURCE_PATH = path.join(__dirname, '..', 'src', 'system-prompt.js');
 const DEFAULT_CONFIG = require('./plugin-config.json');
 
-let brain = null;        // handleMemoryRequest + notifyChatId
+let brain = null;
 let initialized = false;
 
-// ── 日志环形缓冲 ──
 const LOG_MAX = 1000;
-const logBuffer = []; // { ts, level, text }
+const logBuffer = [];
 let consolePatched = false;
 
 function patchConsole() {
@@ -25,7 +26,7 @@ function patchConsole() {
   const wrap = (level, orig) => (...args) => {
     try {
       const text = args.map(a => typeof a === 'string' ? a : (a?.message ? a.message : String(a))).join(' ');
-      if (text.includes('[MemoryProxy]') || text.includes('[aidraw]') || text.includes('[migrate]') || text.startsWith('AI Chat Server')) {
+      if (text.includes('[MemoryProxy]') || text.includes('[jiuguan-watchdog]') || text.includes('[aidraw]') || text.includes('[migrate]') || text.startsWith('AI Chat Server')) {
         logBuffer.push({ ts: Date.now(), level, text });
         if (logBuffer.length > LOG_MAX) logBuffer.shift();
       }
@@ -41,21 +42,13 @@ function getLogsSince(ts) {
   return logBuffer.filter(l => l.ts > ts);
 }
 
-// ── caps 合成 ──
 function synthesizeCaps(settings) {
   const model = (settings.modelName || '').toLowerCase();
   let source = 'custom';
-  // 不再把 deepseek 暴露成 200 万上下文给 memory-proxy：
-  // 超大 caps 会让检索记忆/连续性快照几乎全部进入 system prompt，
-  // 在 jiuguan 的“整本小说世界书 + 长期记忆 + 固定四分支格式”场景下会稀释输出约束。
-  // 这里的 caps 是“提示词编排预算”，不是模型真实物理上限。
   let maxContext = 128000;
   let maxTokens = 32000;
-  if (model.startsWith('deepseek')) {
-    source = 'deepseek';
-  } else if (model.startsWith('mimo')) {
-    source = 'custom';
-  }
+  if (model.startsWith('deepseek')) source = 'deepseek';
+  else if (model.startsWith('mimo')) source = 'custom';
 
   const envContext = parseInt(process.env.MEMPROXY_CONTEXT_WINDOW || '', 10);
   const envOutput = parseInt(process.env.MEMPROXY_MAX_OUTPUT_TOKENS || '', 10);
@@ -75,8 +68,6 @@ function synthesizeCaps(settings) {
   console.log(`[MemoryProxy] caps synthesized: source=${source} ctx=${maxContext} maxTokens=${maxTokens} → ${CAPS_PATH}`);
 }
 
-// ── 配置读写 ──
-// getConfig: 解析失败时打日志并返回默认值，不静默吞错（避免后续 save 用默认值覆盖损坏文件）。
 function getConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8').replace(/^\uFEFF/, '');
@@ -87,7 +78,6 @@ function getConfig() {
   }
 }
 
-// 对象字段深合并：部分 POST（如 {continuity:{enabled:false}}）不应覆盖整个 continuity 对象。
 function deepMerge(base, patch) {
   const out = { ...base };
   for (const [k, v] of Object.entries(patch)) {
@@ -107,31 +97,63 @@ function saveConfig(partial) {
   return merged;
 }
 
-// ── jiuguan Prompt Compiler v3 ──
-// v3 目标：
-// 1) LEVEL 0 输出格式硬锁；
-// 2) 用户上传的整本小说/世界书降级为有限预算 reference；
-// 3) 缺少四分支时先做 LLM repair，失败才追加确定性兜底补丁；
-// 4) 不改 memory-proxy core 协议，保持现有聊天链路稳定。
 const PROMPT_COMPILER_MARK = '[JIUGUAN_PROMPT_COMPILER_V3]';
-const LEGACY_PROMPT_COMPILER_MARKS = [
-  '[JIUGUAN_PROMPT_COMPILER_V1]',
-  '[JIUGUAN_PROMPT_COMPILER_V2]',
-];
+const LEGACY_PROMPT_COMPILER_MARKS = ['[JIUGUAN_PROMPT_COMPILER_V1]', '[JIUGUAN_PROMPT_COMPILER_V2]'];
 const WORLD_REFERENCE_MARK = '[LEVEL 1 - WORLD BOOK / UPLOADED REFERENCE ONLY]';
 
+function readSystemPromptText() {
+  try {
+    const src = fs.readFileSync(SYSTEM_PROMPT_SOURCE_PATH, 'utf-8');
+    const sandbox = { String };
+    const evaluated = vm.runInNewContext(`${src}\n;SYSTEM_PROMPT;`, sandbox, { timeout: 1000 });
+    if (typeof evaluated === 'string' && evaluated.trim()) return evaluated;
+    return src;
+  } catch (e) {
+    console.warn('[jiuguan-watchdog] failed to read src/system-prompt.js:', e?.message || e);
+    return '';
+  }
+}
+
+function loadOptionTypesFromSystemPrompt() {
+  const fallback = { A: 'A', B: 'B', C: 'C', D: 'D' };
+  const prompt = readSystemPromptText();
+  const re = /选项\s*([A-D])\s*[：:]\s*\[([^\]\n]+)\]/g;
+  let m;
+  while ((m = re.exec(prompt))) fallback[m[1]] = m[2].trim();
+  return fallback;
+}
+
+const OPTION_TYPES = loadOptionTypesFromSystemPrompt();
+const OPTION_LABELS = ['A', 'B', 'C', 'D'];
+
+function optionTemplate(label, detail = '') {
+  return `选项 ${label}：[${OPTION_TYPES[label]}]${detail}`;
+}
+
+function optionLines(detail = '...') {
+  return OPTION_LABELS.map(label => optionTemplate(label, detail));
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function optionTypePattern(label) {
+  const type = OPTION_TYPES[label] || label;
+  const parts = type.split('/');
+  const typePattern = parts.length === 2
+    ? `${escapeRegExp(parts[0])}\\s*/\\s*${escapeRegExp(parts[1])}`
+    : escapeRegExp(type);
+  return new RegExp(`选项\\s*${label}\\s*[：:]\\s*[\\[【]?\\s*${typePattern}\\s*[\\]】]?`, 'i');
+}
+
 const PROMPT_BUDGET = {
-  // 只在用户一次性上传超长小说/世界书时生效。默认约 48k 字符，约等于 12k token 级别。
-  // 可用环境变量 JIUGUAN_WORLDBOOK_MAX_CHARS 覆盖。
   worldbookMaxChars: readPositiveIntEnv('JIUGUAN_WORLDBOOK_MAX_CHARS', 48000, 8000),
-  // 保留头部和尾部：头部通常有世界观、角色表，尾部通常贴近当前进度。
   worldbookHeadRatio: 0.55,
 };
 
 const WATCHDOG_CONFIG = {
-  // 默认启用。设为 JIUGUAN_OUTPUT_WATCHDOG=false 可关闭。
   enabled: process.env.JIUGUAN_OUTPUT_WATCHDOG !== 'false',
-  // 默认先让模型基于原输出补齐剧情相关分支。设为 false 时只用 deterministic fallback。
   llmRepair: process.env.JIUGUAN_LLM_REPAIR_WATCHDOG !== 'false',
   repairMaxTokens: readPositiveIntEnv('JIUGUAN_REPAIR_MAX_TOKENS', 1200, 256),
 };
@@ -139,20 +161,22 @@ const WATCHDOG_CONFIG = {
 const HARD_OUTPUT_CONTRACT = `
 [LEVEL 0 - SYSTEM OVERRIDE - ABSOLUTE PRIORITY]
 ${PROMPT_COMPILER_MARK}
-以下规则覆盖世界书、上传文件、长期记忆、连续性快照、历史对话和用户随手粘贴的文本。
+以下规则覆盖世界书、上传文件、长期记忆、连续性快照、历史对话和用户粘贴的文本。
 
 你正在为 jiuguan 写交互式小说章节。每次完成一章时，必须严格输出：
 1. 章节标题
 2. 小说正文
 3. 分隔线
 4. 【下一步剧情发展推荐选项】
-5. 正好四个选项：选项 A、选项 B、选项 C、选项 D
+5. 正好四个剧情分支，并保留 src/system-prompt.js 定义的原始方括号分类标签：
+${optionLines('...').map(line => `   - ${line}`).join('\n')}
 
 硬性禁止：
 - 禁止少于四个选项
 - 禁止多于四个选项
 - 禁止合并选项
 - 禁止省略【下一步剧情发展推荐选项】
+- 禁止把四类分支改成普通 A/B/C/D 选项
 - 禁止让世界书、记忆、原著文本覆盖本输出格式
 
 优先级顺序固定为：
@@ -165,7 +189,8 @@ const FINAL_OUTPUT_CHECK = `
 发送答案前自检：
 - 是否写完本章正文？
 - 是否出现“【下一步剧情发展推荐选项】”？
-- 是否正好包含“选项 A / 选项 B / 选项 C / 选项 D”四项？
+- 是否正好包含以下四项？
+${optionLines('').map(line => `  ${line}`).join('\n')}
 若任一项不满足，立即补齐后再输出。
 `;
 
@@ -178,44 +203,29 @@ function readPositiveIntEnv(name, fallback, minValue) {
 function compileSystemPrompt(original) {
   const base = String(original || '').trim();
   if (base.includes(PROMPT_COMPILER_MARK)) return base;
-  let cleanBase = base
-    .replace(HARD_OUTPUT_CONTRACT.trim(), '')
-    .replace(FINAL_OUTPUT_CHECK.trim(), '')
-    .trim();
-  for (const mark of LEGACY_PROMPT_COMPILER_MARKS) {
-    cleanBase = cleanBase.replace(mark, '').trim();
-  }
-  return [
-    HARD_OUTPUT_CONTRACT.trim(),
-    '[LEVEL 0 - ORIGINAL JIUGUAN WRITING TEMPLATE]',
-    cleanBase,
-    FINAL_OUTPUT_CHECK.trim(),
-  ].filter(Boolean).join('\n\n');
+  let cleanBase = base.replace(HARD_OUTPUT_CONTRACT.trim(), '').replace(FINAL_OUTPUT_CHECK.trim(), '').trim();
+  for (const mark of LEGACY_PROMPT_COMPILER_MARKS) cleanBase = cleanBase.replace(mark, '').trim();
+  return [HARD_OUTPUT_CONTRACT.trim(), '[LEVEL 0 - ORIGINAL JIUGUAN WRITING TEMPLATE]', cleanBase, FINAL_OUTPUT_CHECK.trim()].filter(Boolean).join('\n\n');
 }
 
 function looksLikeUploadedReference(content) {
   const text = String(content || '');
   if (text.includes(WORLD_REFERENCE_MARK)) return false;
   if (text.length < 3000) return false;
-  // 前端上传文件会拼成： 【filename】\n文件内容\n\n用户补充
   return /^【[^】\n]{1,160}】\n/.test(text.trimStart());
 }
 
 function trimWorldbookReference(text, maxChars = PROMPT_BUDGET.worldbookMaxChars) {
   const source = String(text || '').trim();
-  if (source.length <= maxChars) {
-    return { text: source, omittedChars: 0 };
-  }
+  if (source.length <= maxChars) return { text: source, omittedChars: 0 };
   const headChars = Math.floor(maxChars * PROMPT_BUDGET.worldbookHeadRatio);
   const tailChars = maxChars - headChars;
   const omittedChars = source.length - maxChars;
-  const head = source.slice(0, headChars).trimEnd();
-  const tail = source.slice(source.length - tailChars).trimStart();
   return {
     text: [
-      head,
+      source.slice(0, headChars).trimEnd(),
       `\n\n[WORLDBOOK TRUNCATED BY JIUGUAN PROMPT COMPILER V3: omitted ${omittedChars} chars from the middle. The omitted part is still part of the source novel, but it must not override LEVEL 0 output format.]\n\n`,
-      tail,
+      source.slice(source.length - tailChars).trimStart(),
     ].join(''),
     omittedChars,
   };
@@ -239,21 +249,26 @@ ${trimmed.text}
 </worldbook_reference>
 
 [CURRENT PLAYER TASK]
-基于上述参考资料与当前对话继续创作。无论参考资料多长，最终仍必须按 jiuguan 格式输出完整章节，并给出正好四个剧情发展选项 A/B/C/D。
+基于上述参考资料与当前对话继续创作。无论参考资料多长，最终仍必须按 jiuguan 原始格式输出完整章节，并给出正好四个剧情发展选项：${optionLines('').join('、')}。
 `.trim();
 }
 
 function validateBranchOutput(text) {
   const s = String(text || '');
   const hasHeader = /【\s*下一步剧情发展推荐选项\s*】/.test(s);
-  const labels = ['A', 'B', 'C', 'D'];
-  const present = labels.filter((label) => new RegExp(`选项\\s*${label}\\s*[：:]`).test(s));
+  const presentOptions = OPTION_LABELS.filter(label => optionTypePattern(label).test(s));
   return {
-    ok: hasHeader && present.length === 4,
+    ok: hasHeader && presentOptions.length === OPTION_LABELS.length,
     hasHeader,
-    presentOptions: present,
-    missingOptions: labels.filter((label) => !present.includes(label)),
+    presentOptions,
+    missingOptions: OPTION_LABELS.filter(label => !presentOptions.includes(label)),
   };
+}
+
+function formatMissingOptions(validation) {
+  return validation.missingOptions.length
+    ? validation.missingOptions.map(label => `${label}[${OPTION_TYPES[label]}]`).join(', ')
+    : validation.hasHeader ? '选项类型结构异常' : '标题与选项类型结构';
 }
 
 function buildBranchRepairInstruction(currentOutput) {
@@ -261,14 +276,11 @@ function buildBranchRepairInstruction(currentOutput) {
   if (validation.ok) return '';
   return [
     '[FORMAT REPAIR REQUIRED]',
-    '你上一段输出没有通过 jiuguan 格式校验。不要重写已有正文，只补齐缺失的结尾结构。',
-    '必须输出：',
+    '上一段输出没有通过 jiuguan 原始四分支格式校验。不要重写已有正文，只补齐缺失的结尾结构。',
+    '必须严格输出：',
     '【下一步剧情发展推荐选项】',
-    '选项 A：...',
-    '选项 B：...',
-    '选项 C：...',
-    '选项 D：...',
-    `缺失项：${validation.missingOptions.length ? validation.missingOptions.join(', ') : validation.hasHeader ? '选项结构异常' : '标题与选项结构'}`,
+    ...optionLines('...'),
+    `缺失项：${formatMissingOptions(validation)}`,
   ].join('\n');
 }
 
@@ -277,62 +289,50 @@ function buildLLMRepairInstruction(currentOutput) {
   if (validation.ok) return '';
   return [
     '[JIUGUAN OUTPUT WATCHDOG - LLM REPAIR]',
-    '上一段回复已经完成或部分完成小说正文，但结尾没有通过 jiuguan 四分支格式校验。',
+    '上一段回复已经完成或部分完成小说正文，但结尾没有通过 jiuguan 原始四分支格式校验。',
     '请根据上一段正文的剧情、人物状态、冲突和悬念，生成高质量的剧情分支结尾。',
     '',
     '严格要求：',
     '1. 不要重写正文；',
     '2. 只输出缺失的结尾结构；',
-    '3. 必须包含标题：票据“【下一步剧情发展推荐选项】”；'.replace('票据“', '“'),
-    '4. 必须正好包含四项：选项 A、选项 B、选项 C、选项 D；',
+    '3. 必须包含标题：“【下一步剧情发展推荐选项】”；',
+    '4. 必须正好包含以下四项，并保留方括号里的类型标签：',
+    ...optionLines('...').map(line => `   ${line}`),
     '5. 四个选项要和刚才正文的实际剧情相关，不要写通用模板；',
     '6. 不要输出解释、分析或额外说明。',
     '',
-    `缺失项：${validation.missingOptions.length ? validation.missingOptions.join(', ') : validation.hasHeader ? '选项结构异常' : '标题与选项结构'}`,
+    `缺失项：${formatMissingOptions(validation)}`,
   ].join('\n');
 }
 
 function buildDeterministicBranchPatch(currentOutput) {
   const validation = validateBranchOutput(currentOutput);
   if (validation.ok) return '';
-  const needsHeader = !validation.hasHeader;
   const lines = [];
-  if (needsHeader) lines.push('【下一步剧情发展推荐选项】');
-  const missing = validation.missingOptions.length ? validation.missingOptions : ['A', 'B', 'C', 'D'];
+  if (!validation.hasHeader) lines.push('【下一步剧情发展推荐选项】');
+  const missing = validation.missingOptions.length ? validation.missingOptions : OPTION_LABELS;
   const fallback = {
-    A: '沿着当前剧情继续推进，保持人物动机与原有设定一致。',
-    B: '选择更谨慎的路线，优先调查环境、关系或隐藏线索。',
-    C: '尝试打破当前僵局，引入规则、计划或局势变化。',
-    D: '走向更大胆的新展开，让剧情出现意外转折。',
+    A: '沿着原著气质与当前人物动机稳妥推进，优先保持既有剧情逻辑。',
+    B: '以试探、调侃或心理博弈切入，让人物关系出现更微妙的拉扯。',
+    C: '从规则、势力、计划或因果层面改变局势，打开新的操作空间。',
+    D: '引入更大胆的新转折，形成更有新意的展开。',
   };
-  for (const label of missing) {
-    lines.push(`选项 ${label}：${fallback[label]}`);
-  }
+  for (const label of missing) lines.push(optionTemplate(label, fallback[label]));
   return lines.join('\n');
 }
 
 function extractChoiceText(body) {
-  return body?.choices?.[0]?.message?.content
-    || body?.choices?.[0]?.delta?.content
-    || '';
+  return body?.choices?.[0]?.message?.content || body?.choices?.[0]?.delta?.content || '';
 }
 
 function makeRepairBody(compiledBody, currentOutput) {
-  const baseMaxTokens = parseInt(String(compiledBody?.max_tokens || ''), 10);
-  const repairMaxTokens = Number.isFinite(baseMaxTokens)
-    ? Math.max(baseMaxTokens, WATCHDOG_CONFIG.repairMaxTokens)
-    : WATCHDOG_CONFIG.repairMaxTokens;
   const messages = Array.isArray(compiledBody?.messages) ? compiledBody.messages : [];
   return {
     ...compiledBody,
     stream: false,
     temperature: 0.2,
-    max_tokens: repairMaxTokens,
-    messages: [
-      ...messages,
-      { role: 'assistant', content: String(currentOutput || '').slice(-8000) },
-      { role: 'user', content: buildLLMRepairInstruction(currentOutput) },
-    ],
+    max_tokens: WATCHDOG_CONFIG.repairMaxTokens,
+    messages: [...messages, { role: 'assistant', content: String(currentOutput || '').slice(-8000) }, { role: 'user', content: buildLLMRepairInstruction(currentOutput) }],
   };
 }
 
@@ -346,10 +346,10 @@ async function runLLMRepair(currentOutput, compiledBody, headers) {
     const repairText = extractChoiceText(repairResult?.body).trim();
     if (!repairText) return '';
     if (!validateBranchOutput(repairText).ok) {
-      console.warn('[jiuguan-watchdog] LLM repair did not pass format validation; falling back to deterministic patch');
+      console.warn('[jiuguan-watchdog] LLM repair did not pass original option-type validation; falling back to deterministic patch');
       return '';
     }
-    console.warn('[jiuguan-watchdog] LLM repair appended branch options');
+    console.warn('[jiuguan-watchdog] LLM repair appended original typed branch options');
     return repairText;
   } catch (e) {
     console.warn('[jiuguan-watchdog] LLM repair failed; falling back to deterministic patch:', e?.message || e);
@@ -358,30 +358,22 @@ async function runLLMRepair(currentOutput, compiledBody, headers) {
 }
 
 async function buildBestBranchPatch(currentOutput, compiledBody, headers) {
-  const validation = validateBranchOutput(currentOutput);
-  if (validation.ok) return '';
+  if (validateBranchOutput(currentOutput).ok) return '';
   const llmPatch = await runLLMRepair(currentOutput, compiledBody, headers);
-  if (llmPatch) return llmPatch;
-  return buildDeterministicBranchPatch(currentOutput);
+  return llmPatch || buildDeterministicBranchPatch(currentOutput);
 }
 
 async function patchNonStreamResult(result, compiledBody, headers) {
   if (!WATCHDOG_CONFIG.enabled || !result || !result.body || result.body.getReader) return result;
   const text = extractChoiceText(result.body);
-  if (!text) return result;
-  const validation = validateBranchOutput(text);
-  if (validation.ok) return result;
+  if (!text || validateBranchOutput(text).ok) return result;
   const patch = await buildBestBranchPatch(text, compiledBody, headers);
   if (!patch) return result;
-
-  console.warn('[jiuguan-watchdog] non-stream output failed format check; appended branch patch');
+  console.warn('[jiuguan-watchdog] non-stream output failed original option-type check; appended branch patch');
   const nextBody = { ...result.body };
   const choices = Array.isArray(nextBody.choices) ? [...nextBody.choices] : [{ message: { content: text } }];
   const first = { ...(choices[0] || {}) };
-  first.message = {
-    ...(first.message || {}),
-    content: text.trimEnd() + '\n\n' + patch,
-  };
+  first.message = { ...(first.message || {}), content: text.trimEnd() + '\n\n' + patch };
   choices[0] = first;
   nextBody.choices = choices;
   return { ...result, body: nextBody };
@@ -418,25 +410,57 @@ function createSSEContentAccumulator() {
   };
 }
 
+function createSSEPassthroughWithoutDone() {
+  let pending = '';
+  let skipNextBlank = false;
+  const processLines = (lines) => {
+    let out = '';
+    for (const line of lines) {
+      const normalized = line.replace(/\r$/, '');
+      if (normalized.trim() === 'data: [DONE]') {
+        skipNextBlank = true;
+        continue;
+      }
+      if (skipNextBlank && normalized.trim() === '') {
+        skipNextBlank = false;
+        continue;
+      }
+      skipNextBlank = false;
+      out += line + '\n';
+    }
+    return out;
+  };
+  return {
+    push(chunkText) {
+      pending += String(chunkText || '');
+      const lines = pending.split('\n');
+      pending = lines.pop() || '';
+      return processLines(lines);
+    },
+    flush() {
+      const tail = pending;
+      pending = '';
+      return processLines(tail ? [tail] : []);
+    },
+  };
+}
+
 function extractContentFromSSEChunk(chunkText) {
   const acc = createSSEContentAccumulator();
   return acc.push(chunkText) + acc.flush();
 }
 
 function makeSSEDelta(content) {
-  const payload = JSON.stringify({
-    choices: [{ delta: { content } }],
-  });
-  return `data: ${payload}\n\n`;
+  return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
 }
 
 function patchStreamResult(result, compiledBody, headers) {
   if (!WATCHDOG_CONFIG.enabled || !result?.body || typeof result.body.getReader !== 'function') return result;
-  const original = result.body;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  const reader = original.getReader();
-  const acc = createSSEContentAccumulator();
+  const reader = result.body.getReader();
+  const contentAcc = createSSEContentAccumulator();
+  const passthrough = createSSEPassthroughWithoutDone();
   let fullText = '';
 
   const patchedBody = new ReadableStream({
@@ -446,24 +470,27 @@ function patchStreamResult(result, compiledBody, headers) {
           const { done, value } = await reader.read();
           if (done) break;
           const chunkText = decoder.decode(value, { stream: true });
-          fullText += acc.push(chunkText);
-          controller.enqueue(value);
+          fullText += contentAcc.push(chunkText);
+          const out = passthrough.push(chunkText);
+          if (out) controller.enqueue(encoder.encode(out));
         }
         const tail = decoder.decode();
         if (tail) {
-          fullText += acc.push(tail);
-          controller.enqueue(encoder.encode(tail));
+          fullText += contentAcc.push(tail);
+          const out = passthrough.push(tail);
+          if (out) controller.enqueue(encoder.encode(out));
         }
-        fullText += acc.flush();
-        const validation = validateBranchOutput(fullText);
-        if (!validation.ok && fullText.trim()) {
+        fullText += contentAcc.flush();
+        const rawTail = passthrough.flush();
+        if (rawTail) controller.enqueue(encoder.encode(rawTail));
+        if (!validateBranchOutput(fullText).ok && fullText.trim()) {
           const patch = await buildBestBranchPatch(fullText, compiledBody, headers);
           if (patch) {
-            console.warn('[jiuguan-watchdog] stream output failed format check; appended branch patch');
+            console.warn('[jiuguan-watchdog] stream output failed original option-type check; appended branch patch');
             controller.enqueue(encoder.encode(makeSSEDelta('\n\n' + patch)));
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
           }
         }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       } catch (e) {
         controller.error(e);
         return;
@@ -474,7 +501,6 @@ function patchStreamResult(result, compiledBody, headers) {
       await reader.cancel(reason).catch(() => {});
     },
   });
-
   return { ...result, body: patchedBody };
 }
 
@@ -492,30 +518,20 @@ function compileChatBody(body) {
     if (m.role === 'user') return { ...m, content: wrapUploadedReference(m.content) };
     return m;
   });
-  if (!messages.some((m) => m && m.role === 'system')) {
-    messages.unshift({ role: 'system', content: compileSystemPrompt('') });
-  }
+  if (!messages.some((m) => m && m.role === 'system')) messages.unshift({ role: 'system', content: compileSystemPrompt('') });
   return { ...body, messages };
 }
 
-// ── 初始化：加载大脑 ──
 async function init(settings) {
   if (initialized) return;
   synthesizeCaps(settings || {});
-  require('tsx/cjs'); // 注册 tsx，让其发现根 tsconfig.json 的 paths
+  require('tsx/cjs');
   const mod = require('../memory-proxy-plugin/src/server/memory-handler.ts');
-  brain = {
-    handleMemoryRequest: mod.handleMemoryRequest,
-    notifyChatId: mod.notifyChatId,
-  };
+  brain = { handleMemoryRequest: mod.handleMemoryRequest, notifyChatId: mod.notifyChatId };
   initialized = true;
   console.log('[MemoryProxy] brain loaded: handleMemoryRequest ready');
 }
 
-// ── upstream 头合成 ──
-// 用 new URL 正确解析 apiUrl → host/port/path，避免硬编码 443 导致自定义端口畸形 URL。
-// 大脑读 headers['authorization']（strip 'Bearer ' 后以 Bearer 转发）、x-upstream-host/port/path
-// 拼 https://${host}:${port}${path}。jiuguan 只用 deepseek（https:443），故 scheme 固定 https。
 function _buildUpstreamHeaders(body, settings) {
   let u;
   try { u = new URL(settings.apiUrl || ''); }
@@ -531,20 +547,16 @@ function _buildUpstreamHeaders(body, settings) {
   };
 }
 
-// 模块级复用 agent：keepAlive 池跨请求复用，避免每请求新建导致 socket 泄漏。
 const upstreamAgent = new https.Agent({ keepAlive: true, maxSockets: 32 });
 
-// ── 主入口：转发给大脑 ──
 async function handleChatRequest(body, settings) {
   if (!initialized) await init(settings);
   const compiledBody = compileChatBody(body);
   const headers = _buildUpstreamHeaders(compiledBody, settings);
-  // 大脑签名：handleMemoryRequest(body, headers, pluginDir, upstreamAgent)
   const result = await brain.handleMemoryRequest(compiledBody, headers, PLUGIN_DIR, upstreamAgent);
   return applyOutputWatchdog(result, compiledBody, headers);
 }
 
-// 模块加载即打补丁，确保任何 [MemoryProxy] 日志都能被捕获（即使 init 未调用）
 patchConsole();
 
 module.exports = {
@@ -562,6 +574,7 @@ module.exports = {
   buildLLMRepairInstruction,
   buildDeterministicBranchPatch,
   createSSEContentAccumulator,
+  createSSEPassthroughWithoutDone,
   extractContentFromSSEChunk,
   runLLMRepair,
   applyOutputWatchdog,
