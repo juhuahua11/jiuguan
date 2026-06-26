@@ -79,7 +79,7 @@ function synthesizeCaps(settings) {
 // getConfig: 解析失败时打日志并返回默认值，不静默吞错（避免后续 save 用默认值覆盖损坏文件）。
 function getConfig() {
   try {
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8').replace(/^﻿/, '');
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8').replace(/^\uFEFF/, '');
     return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
   } catch (e) {
     console.warn('[MemoryProxy] plugin-config.json parse failed, using defaults:', e?.message || e);
@@ -111,7 +111,7 @@ function saveConfig(partial) {
 // v3 目标：
 // 1) LEVEL 0 输出格式硬锁；
 // 2) 用户上传的整本小说/世界书降级为有限预算 reference；
-// 3) 对非流式结果做自动格式补丁，对流式结果做尾部 SSE 补丁；
+// 3) 缺少四分支时先做 LLM repair，失败才追加确定性兜底补丁；
 // 4) 不改 memory-proxy core 协议，保持现有聊天链路稳定。
 const PROMPT_COMPILER_MARK = '[JIUGUAN_PROMPT_COMPILER_V3]';
 const LEGACY_PROMPT_COMPILER_MARKS = [
@@ -131,6 +131,9 @@ const PROMPT_BUDGET = {
 const WATCHDOG_CONFIG = {
   // 默认启用。设为 JIUGUAN_OUTPUT_WATCHDOG=false 可关闭。
   enabled: process.env.JIUGUAN_OUTPUT_WATCHDOG !== 'false',
+  // 默认先让模型基于原输出补齐剧情相关分支。设为 false 时只用 deterministic fallback。
+  llmRepair: process.env.JIUGUAN_LLM_REPAIR_WATCHDOG !== 'false',
+  repairMaxTokens: readPositiveIntEnv('JIUGUAN_REPAIR_MAX_TOKENS', 1200, 256),
 };
 
 const HARD_OUTPUT_CONTRACT = `
@@ -269,6 +272,26 @@ function buildBranchRepairInstruction(currentOutput) {
   ].join('\n');
 }
 
+function buildLLMRepairInstruction(currentOutput) {
+  const validation = validateBranchOutput(currentOutput);
+  if (validation.ok) return '';
+  return [
+    '[JIUGUAN OUTPUT WATCHDOG - LLM REPAIR]',
+    '上一段回复已经完成或部分完成小说正文，但结尾没有通过 jiuguan 四分支格式校验。',
+    '请根据上一段正文的剧情、人物状态、冲突和悬念，生成高质量的剧情分支结尾。',
+    '',
+    '严格要求：',
+    '1. 不要重写正文；',
+    '2. 只输出缺失的结尾结构；',
+    '3. 必须包含标题：票据“【下一步剧情发展推荐选项】”；'.replace('票据“', '“'),
+    '4. 必须正好包含四项：选项 A、选项 B、选项 C、选项 D；',
+    '5. 四个选项要和刚才正文的实际剧情相关，不要写通用模板；',
+    '6. 不要输出解释、分析或额外说明。',
+    '',
+    `缺失项：${validation.missingOptions.length ? validation.missingOptions.join(', ') : validation.hasHeader ? '选项结构异常' : '标题与选项结构'}`,
+  ].join('\n');
+}
+
 function buildDeterministicBranchPatch(currentOutput) {
   const validation = validateBranchOutput(currentOutput);
   if (validation.ok) return '';
@@ -294,16 +317,64 @@ function extractChoiceText(body) {
     || '';
 }
 
-function patchNonStreamResult(result) {
+function makeRepairBody(compiledBody, currentOutput) {
+  const baseMaxTokens = parseInt(String(compiledBody?.max_tokens || ''), 10);
+  const repairMaxTokens = Number.isFinite(baseMaxTokens)
+    ? Math.max(baseMaxTokens, WATCHDOG_CONFIG.repairMaxTokens)
+    : WATCHDOG_CONFIG.repairMaxTokens;
+  const messages = Array.isArray(compiledBody?.messages) ? compiledBody.messages : [];
+  return {
+    ...compiledBody,
+    stream: false,
+    temperature: 0.2,
+    max_tokens: repairMaxTokens,
+    messages: [
+      ...messages,
+      { role: 'assistant', content: String(currentOutput || '').slice(-8000) },
+      { role: 'user', content: buildLLMRepairInstruction(currentOutput) },
+    ],
+  };
+}
+
+async function runLLMRepair(currentOutput, compiledBody, headers) {
+  if (!WATCHDOG_CONFIG.enabled || !WATCHDOG_CONFIG.llmRepair) return '';
+  const instruction = buildLLMRepairInstruction(currentOutput);
+  if (!instruction) return '';
+  try {
+    const repairBody = makeRepairBody(compiledBody, currentOutput);
+    const repairResult = await brain.handleMemoryRequest(repairBody, headers, PLUGIN_DIR, upstreamAgent);
+    const repairText = extractChoiceText(repairResult?.body).trim();
+    if (!repairText) return '';
+    if (!validateBranchOutput(repairText).ok) {
+      console.warn('[jiuguan-watchdog] LLM repair did not pass format validation; falling back to deterministic patch');
+      return '';
+    }
+    console.warn('[jiuguan-watchdog] LLM repair appended branch options');
+    return repairText;
+  } catch (e) {
+    console.warn('[jiuguan-watchdog] LLM repair failed; falling back to deterministic patch:', e?.message || e);
+    return '';
+  }
+}
+
+async function buildBestBranchPatch(currentOutput, compiledBody, headers) {
+  const validation = validateBranchOutput(currentOutput);
+  if (validation.ok) return '';
+  const llmPatch = await runLLMRepair(currentOutput, compiledBody, headers);
+  if (llmPatch) return llmPatch;
+  return buildDeterministicBranchPatch(currentOutput);
+}
+
+async function patchNonStreamResult(result, compiledBody, headers) {
   if (!WATCHDOG_CONFIG.enabled || !result || !result.body || result.body.getReader) return result;
   const text = extractChoiceText(result.body);
   if (!text) return result;
   const validation = validateBranchOutput(text);
   if (validation.ok) return result;
-  const patch = buildDeterministicBranchPatch(text);
+  const patch = await buildBestBranchPatch(text, compiledBody, headers);
   if (!patch) return result;
 
-  console.warn('[jiuguan-watchdog] non-stream output failed format check; appended deterministic branch patch');
+  console.warn('[jiuguan-watchdog] non-stream output failed format check; appended branch patch');
   const nextBody = { ...result.body };
   const choices = Array.isArray(nextBody.choices) ? [...nextBody.choices] : [{ message: { content: text } }];
   const first = { ...(choices[0] || {}) };
@@ -316,20 +387,40 @@ function patchNonStreamResult(result) {
   return { ...result, body: nextBody };
 }
 
+function createSSEContentAccumulator() {
+  let pending = '';
+  const consumeLines = (lines) => {
+    let content = '';
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith('data: ')) continue;
+      const payload = t.slice(6).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const json = JSON.parse(payload);
+        content += json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || '';
+      } catch {}
+    }
+    return content;
+  };
+  return {
+    push(chunkText) {
+      pending += String(chunkText || '');
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() || '';
+      return consumeLines(lines);
+    },
+    flush() {
+      const tail = pending;
+      pending = '';
+      return consumeLines(tail ? [tail] : []);
+    },
+  };
+}
+
 function extractContentFromSSEChunk(chunkText) {
-  let content = '';
-  const lines = String(chunkText || '').split(/\r?\n/);
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t.startsWith('data: ')) continue;
-    const payload = t.slice(6).trim();
-    if (!payload || payload === '[DONE]') continue;
-    try {
-      const json = JSON.parse(payload);
-      content += json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || '';
-    } catch {}
-  }
-  return content;
+  const acc = createSSEContentAccumulator();
+  return acc.push(chunkText) + acc.flush();
 }
 
 function makeSSEDelta(content) {
@@ -339,12 +430,13 @@ function makeSSEDelta(content) {
   return `data: ${payload}\n\n`;
 }
 
-function patchStreamResult(result) {
+function patchStreamResult(result, compiledBody, headers) {
   if (!WATCHDOG_CONFIG.enabled || !result?.body || typeof result.body.getReader !== 'function') return result;
   const original = result.body;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const reader = original.getReader();
+  const acc = createSSEContentAccumulator();
   let fullText = '';
 
   const patchedBody = new ReadableStream({
@@ -354,19 +446,20 @@ function patchStreamResult(result) {
           const { done, value } = await reader.read();
           if (done) break;
           const chunkText = decoder.decode(value, { stream: true });
-          fullText += extractContentFromSSEChunk(chunkText);
+          fullText += acc.push(chunkText);
           controller.enqueue(value);
         }
         const tail = decoder.decode();
         if (tail) {
-          fullText += extractContentFromSSEChunk(tail);
+          fullText += acc.push(tail);
           controller.enqueue(encoder.encode(tail));
         }
+        fullText += acc.flush();
         const validation = validateBranchOutput(fullText);
         if (!validation.ok && fullText.trim()) {
-          const patch = buildDeterministicBranchPatch(fullText);
+          const patch = await buildBestBranchPatch(fullText, compiledBody, headers);
           if (patch) {
-            console.warn('[jiuguan-watchdog] stream output failed format check; appended deterministic branch patch');
+            console.warn('[jiuguan-watchdog] stream output failed format check; appended branch patch');
             controller.enqueue(encoder.encode(makeSSEDelta('\n\n' + patch)));
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
           }
@@ -385,10 +478,10 @@ function patchStreamResult(result) {
   return { ...result, body: patchedBody };
 }
 
-function applyOutputWatchdog(result) {
+async function applyOutputWatchdog(result, compiledBody, headers) {
   if (!WATCHDOG_CONFIG.enabled) return result;
-  if (result?.body && typeof result.body.getReader === 'function') return patchStreamResult(result);
-  return patchNonStreamResult(result);
+  if (result?.body && typeof result.body.getReader === 'function') return patchStreamResult(result, compiledBody, headers);
+  return patchNonStreamResult(result, compiledBody, headers);
 }
 
 function compileChatBody(body) {
@@ -448,7 +541,7 @@ async function handleChatRequest(body, settings) {
   const headers = _buildUpstreamHeaders(compiledBody, settings);
   // 大脑签名：handleMemoryRequest(body, headers, pluginDir, upstreamAgent)
   const result = await brain.handleMemoryRequest(compiledBody, headers, PLUGIN_DIR, upstreamAgent);
-  return applyOutputWatchdog(result);
+  return applyOutputWatchdog(result, compiledBody, headers);
 }
 
 // 模块加载即打补丁，确保任何 [MemoryProxy] 日志都能被捕获（即使 init 未调用）
@@ -466,8 +559,11 @@ module.exports = {
   wrapUploadedReference,
   validateBranchOutput,
   buildBranchRepairInstruction,
+  buildLLMRepairInstruction,
   buildDeterministicBranchPatch,
+  createSSEContentAccumulator,
   extractContentFromSSEChunk,
+  runLLMRepair,
   applyOutputWatchdog,
   compileChatBody,
   handleChatRequest,
