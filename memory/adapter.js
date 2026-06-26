@@ -100,6 +100,7 @@ function saveConfig(partial) {
 const PROMPT_COMPILER_MARK = '[JIUGUAN_PROMPT_COMPILER_V3]';
 const LEGACY_PROMPT_COMPILER_MARKS = ['[JIUGUAN_PROMPT_COMPILER_V1]', '[JIUGUAN_PROMPT_COMPILER_V2]'];
 const WORLD_REFERENCE_MARK = '[LEVEL 1 - WORLD BOOK / UPLOADED REFERENCE ONLY]';
+const BRANCH_HEADER = '【下一步剧情发展推荐选项】';
 
 function readSystemPromptText() {
   try {
@@ -138,13 +139,28 @@ function escapeRegExp(text) {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function optionTypePattern(label) {
+function typePatternFor(label) {
   const type = OPTION_TYPES[label] || label;
   const parts = type.split('/');
-  const typePattern = parts.length === 2
+  return parts.length === 2
     ? `${escapeRegExp(parts[0])}\\s*/\\s*${escapeRegExp(parts[1])}`
     : escapeRegExp(type);
-  return new RegExp(`选项\\s*${label}\\s*[：:]\\s*[\\[【]?\\s*${typePattern}\\s*[\\]】]?`, 'i');
+}
+
+function optionTypePattern(label) {
+  return new RegExp(`选项\\s*${label}\\s*[：:]\\s*[\\[【]?\\s*${typePatternFor(label)}\\s*[\\]】]?`, 'i');
+}
+
+function optionLinePattern(label) {
+  return new RegExp(`^\\s*选项\\s*${label}\\s*[：:]\\s*[\\[【]?\\s*${typePatternFor(label)}\\s*[\\]】]?\\s*(.*)$`, 'i');
+}
+
+function meaningfulOptionText(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (/^[.。…\s-]*$/.test(s)) return false;
+  if (s === '...' || s === '…') return false;
+  return s.length >= 4;
 }
 
 const PROMPT_BUDGET = {
@@ -167,7 +183,7 @@ ${PROMPT_COMPILER_MARK}
 1. 章节标题
 2. 小说正文
 3. 分隔线
-4. 【下一步剧情发展推荐选项】
+4. ${BRANCH_HEADER}
 5. 正好四个剧情分支，并保留 src/system-prompt.js 定义的原始方括号分类标签：
 ${optionLines('...').map(line => `   - ${line}`).join('\n')}
 
@@ -175,7 +191,7 @@ ${optionLines('...').map(line => `   - ${line}`).join('\n')}
 - 禁止少于四个选项
 - 禁止多于四个选项
 - 禁止合并选项
-- 禁止省略【下一步剧情发展推荐选项】
+- 禁止省略${BRANCH_HEADER}
 - 禁止把四类分支改成普通 A/B/C/D 选项
 - 禁止让世界书、记忆、原著文本覆盖本输出格式
 
@@ -188,8 +204,8 @@ const FINAL_OUTPUT_CHECK = `
 [FINAL OUTPUT CHECK - MUST PASS BEFORE ANSWERING]
 发送答案前自检：
 - 是否写完本章正文？
-- 是否出现“【下一步剧情发展推荐选项】”？
-- 是否正好包含以下四项？
+- 是否出现“${BRANCH_HEADER}”？
+- 是否正好包含以下四项，且每项标签后都有实际剧情内容？
 ${optionLines('').map(line => `  ${line}`).join('\n')}
 若任一项不满足，立即补齐后再输出。
 `;
@@ -253,10 +269,24 @@ ${trimmed.text}
 `.trim();
 }
 
+function collectTypedOptionLines(text) {
+  const result = {};
+  const lines = String(text || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    for (const label of OPTION_LABELS) {
+      const m = line.match(optionLinePattern(label));
+      if (m && meaningfulOptionText(m[1])) result[label] = line;
+    }
+  }
+  return result;
+}
+
 function validateBranchOutput(text) {
   const s = String(text || '');
   const hasHeader = /【\s*下一步剧情发展推荐选项\s*】/.test(s);
-  const presentOptions = OPTION_LABELS.filter(label => optionTypePattern(label).test(s));
+  const optionMap = collectTypedOptionLines(s);
+  const presentOptions = OPTION_LABELS.filter(label => optionMap[label]);
   return {
     ok: hasHeader && presentOptions.length === OPTION_LABELS.length,
     hasHeader,
@@ -265,10 +295,25 @@ function validateBranchOutput(text) {
   };
 }
 
+function extractTypedBranchBlock(text) {
+  const optionMap = collectTypedOptionLines(text);
+  if (!OPTION_LABELS.every(label => optionMap[label])) return '';
+  return [BRANCH_HEADER, ...OPTION_LABELS.map(label => optionMap[label])].join('\n');
+}
+
+function replaceBranchSection(output, branchBlock) {
+  const source = String(output || '').trimEnd();
+  const block = String(branchBlock || '').trim();
+  if (!block) return source;
+  const headerMatch = source.match(/【\s*下一步剧情发展推荐选项\s*】/);
+  if (!headerMatch || headerMatch.index == null) return source + '\n\n' + block;
+  return source.slice(0, headerMatch.index).trimEnd() + '\n\n' + block;
+}
+
 function formatMissingOptions(validation) {
   return validation.missingOptions.length
     ? validation.missingOptions.map(label => `${label}[${OPTION_TYPES[label]}]`).join(', ')
-    : validation.hasHeader ? '选项类型结构异常' : '标题与选项类型结构';
+    : validation.hasHeader ? '选项类型结构异常或选项内容为空' : '标题与选项类型结构';
 }
 
 function buildBranchRepairInstruction(currentOutput) {
@@ -278,7 +323,7 @@ function buildBranchRepairInstruction(currentOutput) {
     '[FORMAT REPAIR REQUIRED]',
     '上一段输出没有通过 jiuguan 原始四分支格式校验。不要重写已有正文，只补齐缺失的结尾结构。',
     '必须严格输出：',
-    '【下一步剧情发展推荐选项】',
+    BRANCH_HEADER,
     ...optionLines('...'),
     `缺失项：${formatMissingOptions(validation)}`,
   ].join('\n');
@@ -290,15 +335,15 @@ function buildLLMRepairInstruction(currentOutput) {
   return [
     '[JIUGUAN OUTPUT WATCHDOG - LLM REPAIR]',
     '上一段回复已经完成或部分完成小说正文，但结尾没有通过 jiuguan 原始四分支格式校验。',
-    '请根据上一段正文的剧情、人物状态、冲突和悬念，生成高质量的剧情分支结尾。',
+    '请只生成最终读者应该看到的剧情分支块，不要复述本提示词，不要输出编号规则。',
     '',
     '严格要求：',
     '1. 不要重写正文；',
-    '2. 只输出缺失的结尾结构；',
-    '3. 必须包含标题：“【下一步剧情发展推荐选项】”；',
+    '2. 只输出分支块；',
+    `3. 第一行必须是：${BRANCH_HEADER}`,
     '4. 必须正好包含以下四项，并保留方括号里的类型标签：',
     ...optionLines('...').map(line => `   ${line}`),
-    '5. 四个选项要和刚才正文的实际剧情相关，不要写通用模板；',
+    '5. 每个选项的标签后必须写出贴合刚才正文的实际剧情内容，不能只输出省略号或模板；',
     '6. 不要输出解释、分析或额外说明。',
     '',
     `缺失项：${formatMissingOptions(validation)}`,
@@ -309,7 +354,7 @@ function buildDeterministicBranchPatch(currentOutput) {
   const validation = validateBranchOutput(currentOutput);
   if (validation.ok) return '';
   const lines = [];
-  if (!validation.hasHeader) lines.push('【下一步剧情发展推荐选项】');
+  lines.push(BRANCH_HEADER);
   const missing = validation.missingOptions.length ? validation.missingOptions : OPTION_LABELS;
   const fallback = {
     A: '沿着原著气质与当前人物动机稳妥推进，优先保持既有剧情逻辑。',
@@ -344,13 +389,14 @@ async function runLLMRepair(currentOutput, compiledBody, headers) {
     const repairBody = makeRepairBody(compiledBody, currentOutput);
     const repairResult = await brain.handleMemoryRequest(repairBody, headers, PLUGIN_DIR, upstreamAgent);
     const repairText = extractChoiceText(repairResult?.body).trim();
-    if (!repairText) return '';
-    if (!validateBranchOutput(repairText).ok) {
+    const repairBlock = extractTypedBranchBlock(repairText);
+    if (!repairBlock) return '';
+    if (!validateBranchOutput(repairBlock).ok) {
       console.warn('[jiuguan-watchdog] LLM repair did not pass original option-type validation; falling back to deterministic patch');
       return '';
     }
-    console.warn('[jiuguan-watchdog] LLM repair appended original typed branch options');
-    return repairText;
+    console.warn('[jiuguan-watchdog] LLM repair produced replacement branch block');
+    return repairBlock;
   } catch (e) {
     console.warn('[jiuguan-watchdog] LLM repair failed; falling back to deterministic patch:', e?.message || e);
     return '';
@@ -369,11 +415,12 @@ async function patchNonStreamResult(result, compiledBody, headers) {
   if (!text || validateBranchOutput(text).ok) return result;
   const patch = await buildBestBranchPatch(text, compiledBody, headers);
   if (!patch) return result;
-  console.warn('[jiuguan-watchdog] non-stream output failed original option-type check; appended branch patch');
+  const finalText = replaceBranchSection(text, patch);
+  console.warn('[jiuguan-watchdog] non-stream output failed original option-type check; replaced branch section');
   const nextBody = { ...result.body };
   const choices = Array.isArray(nextBody.choices) ? [...nextBody.choices] : [{ message: { content: text } }];
   const first = { ...(choices[0] || {}) };
-  first.message = { ...(first.message || {}), content: text.trimEnd() + '\n\n' + patch };
+  first.message = { ...(first.message || {}), content: finalText };
   choices[0] = first;
   nextBody.choices = choices;
   return { ...result, body: nextBody };
@@ -411,37 +458,9 @@ function createSSEContentAccumulator() {
 }
 
 function createSSEPassthroughWithoutDone() {
-  let pending = '';
-  let skipNextBlank = false;
-  const processLines = (lines) => {
-    let out = '';
-    for (const line of lines) {
-      const normalized = line.replace(/\r$/, '');
-      if (normalized.trim() === 'data: [DONE]') {
-        skipNextBlank = true;
-        continue;
-      }
-      if (skipNextBlank && normalized.trim() === '') {
-        skipNextBlank = false;
-        continue;
-      }
-      skipNextBlank = false;
-      out += line + '\n';
-    }
-    return out;
-  };
   return {
-    push(chunkText) {
-      pending += String(chunkText || '');
-      const lines = pending.split('\n');
-      pending = lines.pop() || '';
-      return processLines(lines);
-    },
-    flush() {
-      const tail = pending;
-      pending = '';
-      return processLines(tail ? [tail] : []);
-    },
+    push() { return ''; },
+    flush() { return ''; },
   };
 }
 
@@ -460,7 +479,6 @@ function patchStreamResult(result, compiledBody, headers) {
   const encoder = new TextEncoder();
   const reader = result.body.getReader();
   const contentAcc = createSSEContentAccumulator();
-  const passthrough = createSSEPassthroughWithoutDone();
   let fullText = '';
 
   const patchedBody = new ReadableStream({
@@ -471,25 +489,20 @@ function patchStreamResult(result, compiledBody, headers) {
           if (done) break;
           const chunkText = decoder.decode(value, { stream: true });
           fullText += contentAcc.push(chunkText);
-          const out = passthrough.push(chunkText);
-          if (out) controller.enqueue(encoder.encode(out));
         }
         const tail = decoder.decode();
-        if (tail) {
-          fullText += contentAcc.push(tail);
-          const out = passthrough.push(tail);
-          if (out) controller.enqueue(encoder.encode(out));
-        }
+        if (tail) fullText += contentAcc.push(tail);
         fullText += contentAcc.flush();
-        const rawTail = passthrough.flush();
-        if (rawTail) controller.enqueue(encoder.encode(rawTail));
+
+        let finalText = fullText;
         if (!validateBranchOutput(fullText).ok && fullText.trim()) {
           const patch = await buildBestBranchPatch(fullText, compiledBody, headers);
           if (patch) {
-            console.warn('[jiuguan-watchdog] stream output failed original option-type check; appended branch patch');
-            controller.enqueue(encoder.encode(makeSSEDelta('\n\n' + patch)));
+            finalText = replaceBranchSection(fullText, patch);
+            console.warn('[jiuguan-watchdog] stream output failed original option-type check; replaced branch section');
           }
         }
+        if (finalText) controller.enqueue(encoder.encode(makeSSEDelta(finalText)));
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       } catch (e) {
         controller.error(e);
@@ -576,6 +589,8 @@ module.exports = {
   createSSEContentAccumulator,
   createSSEPassthroughWithoutDone,
   extractContentFromSSEChunk,
+  extractTypedBranchBlock,
+  replaceBranchSection,
   runLLMRepair,
   applyOutputWatchdog,
   compileChatBody,
