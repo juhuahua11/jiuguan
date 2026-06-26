@@ -4,6 +4,7 @@ const path = require('path');
 const SYSTEM_PROMPT_SOURCE_PATH = path.join(__dirname, '..', 'src', 'system-prompt.js');
 const OPTION_WORD = '\u9009\u9879';
 const HEADER_TEXT = '\u3010\u4e0b\u4e00\u6b65\u5267\u60c5\u53d1\u5c55\u63a8\u8350\u9009\u9879\u3011';
+const FULLWIDTH_COLON = String.fromCharCode(0xff1a);
 
 function loadOptionTypes() {
   const out = { A: 'A', B: 'B', C: 'C', D: 'D' };
@@ -21,7 +22,7 @@ function loadOptionTypes() {
 const OPTION_TYPES = loadOptionTypes();
 
 function optionTemplate(label, detail = '') {
-  return OPTION_WORD + ' ' + label + ':[' + OPTION_TYPES[label] + ']' + detail;
+  return OPTION_WORD + ' ' + label + FULLWIDTH_COLON + '[' + OPTION_TYPES[label] + ']' + detail;
 }
 
 function escapeRegExp(text) {
