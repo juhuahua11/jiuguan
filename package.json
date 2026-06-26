@@ -5,7 +5,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server-start.js"
   },
   "dependencies": {
     "memory-proxy-plugin": "file:./memory-proxy-plugin",
