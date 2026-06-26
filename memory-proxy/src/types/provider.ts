@@ -5,6 +5,7 @@ export interface ChatMessage {
 
 export interface ProviderCapabilities {
   contextWindow: number;
+  maxOutputTokens: number;
   supportsSystemRole: boolean;
   supportsToolCall: boolean;
   supportsJsonMode: boolean;

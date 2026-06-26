@@ -124,15 +124,32 @@ export function buildGraph(sessionId: string, store: GraphStore): void {
   }
 }
 
-// Global graph store per session
+// Global graph store per session, with LRU eviction to prevent unbounded
+// memory growth from inactive sessions. Each active session's graph holds
+// all facts/events/relationships in memory; without eviction, long-running
+// servers with many sessions would leak memory indefinitely.
 const sessionGraphs = new Map<string, GraphStore>();
+const MAX_GRAPH_CACHE = 32;
+
+function evictLRU() {
+  if (sessionGraphs.size <= MAX_GRAPH_CACHE) return;
+  // Map keys iterate in insertion order — first key is LRU
+  const oldest = sessionGraphs.keys().next().value;
+  if (oldest !== undefined) {
+    sessionGraphs.delete(oldest);
+    console.log(`[MemoryProxy] Graph LRU evicted session=${oldest.slice(0, 40)} (cache size: ${sessionGraphs.size})`);
+  }
+}
 
 export function getSessionGraph(sessionId: string): GraphStore {
   let store = sessionGraphs.get(sessionId);
   if (!store) {
     store = new GraphStore();
+    const t0 = Date.now();
     buildGraph(sessionId, store);
+    console.log(`[MemoryProxy] Graph built for session=${sessionId.slice(0, 40)} — nodes=${store.nodeCount} edges=${store.edgeCount} (${Date.now() - t0}ms)`);
     sessionGraphs.set(sessionId, store);
+    evictLRU();
   }
   return store;
 }

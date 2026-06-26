@@ -29,6 +29,7 @@ export class OpenAIProvider extends BaseProvider {
   getCapabilities(): ProviderCapabilities {
     return {
       contextWindow: 128000,
+      maxOutputTokens: this.getMaxOutputTokens(),
       supportsSystemRole: true,
       supportsToolCall: true,
       supportsJsonMode: true,

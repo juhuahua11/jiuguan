@@ -27,6 +27,7 @@ export class MiMoProvider extends OpenAIProvider {
   getCapabilities(): ProviderCapabilities {
     return {
       contextWindow: this.getContextWindow(),
+      maxOutputTokens: this.getMaxOutputTokens(),
       supportsSystemRole: true,
       supportsToolCall: true,
       supportsJsonMode: true,

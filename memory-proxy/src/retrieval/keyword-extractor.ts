@@ -273,7 +273,7 @@ export async function extractKeywords(
     try {
       const label = attempt > 0 ? ` (retry ${attempt})` : '';
       console.log(`[MemoryProxy] Keyword LLM call${label} → promptLen:`, prompt.length);
-      const response = await llmCallWithTimeout(llmCall, prompt, 8000);
+      const response = await llmCallWithTimeout(llmCall, prompt, 15000);
       if (!response) {
         console.log(`[MemoryProxy] Keyword LLM${label}: empty/timeout`);
         if (attempt === 0) { await sleep(1000); continue; }
@@ -364,9 +364,9 @@ export async function refreshKeywordCache(
   const myGen = cache.generation;
   try {
     const prompt = buildExtractionInput(messages);
-    const response = await llmCallWithTimeout(llmCall, prompt, 8000);
+    const response = await llmCallWithTimeout(llmCall, prompt, 15000);
     if (!response) {
-      console.log('[MemoryProxy] Keyword async refresh: LLM returned empty');
+      console.log('[MemoryProxy] Keyword async refresh: LLM returned empty or timeout');
       return;
     }
     const parsed = parseKeywordResponse(response);

@@ -11,12 +11,12 @@ import { insertRelationship as upsertRelationship } from '../../../src/storage/r
 import { v4 as uuid } from 'uuid';
 
 const caps: ProviderCapabilities = {
-  contextWindow: 100000, supportsSystemRole: true,
+  contextWindow: 100000, maxOutputTokens: 8192, supportsSystemRole: true,
   supportsToolCall: true, supportsJsonMode: true, supportsReasoning: false,
 };
 
 const tightCaps: ProviderCapabilities = {
-  contextWindow: 60, supportsSystemRole: true,
+  contextWindow: 60, maxOutputTokens: 4096, supportsSystemRole: true,
   supportsToolCall: true, supportsJsonMode: true, supportsReasoning: false,
 };
 

@@ -3,7 +3,7 @@ import { TokenBudgetManager } from '../../../src/budget/token-budget.js';
 import { ProviderCapabilities } from '../../../src/types/provider.js';
 
 const caps: ProviderCapabilities = {
-  contextWindow: 100000, supportsSystemRole: true,
+  contextWindow: 100000, maxOutputTokens: 8192, supportsSystemRole: true,
   supportsToolCall: true, supportsJsonMode: true, supportsReasoning: false,
 };
 
@@ -43,7 +43,7 @@ describe('TokenBudgetManager', () => {
     });
     const total = alloc.canon + alloc.state + alloc.facts + alloc.events +
       alloc.relationships + alloc.working + alloc.summaries;
-    expect(total).toBeLessThanOrEqual(100000 - 4096);
+    expect(total).toBeLessThanOrEqual(100000 - 8192);
     expect(alloc.canon).toBe(500);
     expect(alloc.state).toBe(200);
   });

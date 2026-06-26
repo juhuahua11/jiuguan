@@ -34,6 +34,7 @@ export class ClaudeProvider extends BaseProvider {
   getCapabilities(): ProviderCapabilities {
     return {
       contextWindow: 200000,
+      maxOutputTokens: this.getMaxOutputTokens(),
       supportsSystemRole: true,
       supportsToolCall: true,
       supportsJsonMode: false,

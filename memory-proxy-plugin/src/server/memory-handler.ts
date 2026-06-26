@@ -252,13 +252,27 @@ export async function handleMemoryRequest(
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 1024,
           temperature: 0,
+          // v4 reasoning models may emit the answer in reasoning_content and
+          // leave content empty when reasoning_effort is unset. Pin to 'low'
+          // so the model actually writes a parseable JSON in content.
+          reasoning_effort: 'low',
         }),
       };
       if (upstreamAgent) opts.agent = upstreamAgent;
-      const res = await fetch(`${extractionUrl}${extractionPath}`, opts as RequestInit);
-      if (!res.ok) return '';
+      const kwUrl = `${extractionUrl}${extractionPath}`;
+      const res = await fetch(kwUrl, opts as RequestInit);
+      if (!res.ok) {
+        const errText = await res.text().catch(function() { return ''; });
+        console.log('[MemoryProxy] Keyword refresh FAILED: HTTP ' + res.status + ' ' + errText.slice(0, 200));
+        return '';
+      }
       const data: any = await res.json();
-      return data?.choices?.[0]?.message?.content || '';
+      const msg = data?.choices?.[0]?.message;
+      const result = msg?.content || msg?.reasoning_content || '';
+      if (!result) {
+        console.log('[MemoryProxy] Keyword refresh: response empty — content=' + (msg?.content ? 'present(' + msg.content.length + ')' : 'empty') + ' reasoning_content=' + (msg?.reasoning_content ? 'present(' + msg.reasoning_content.length + ')' : 'empty'));
+      }
+      return result;
     }, extractionCache);
   }
   console.log(`[MemoryProxy] Keywords: entities=${keywordCtx.entities.length} keywords=${keywordCtx.keywords.length} search_terms=${keywordCtx.search_terms.length} implicit=${keywordCtx.implicit_topics.length}`);
@@ -330,6 +344,7 @@ export async function handleMemoryRequest(
   // 7. Memory retrieval + context assembly
   const budget = new TokenBudgetManager({
     contextWindow: caps.contextWindow,
+    maxOutputTokens: caps.maxOutputTokens,
     supportsSystemRole: caps.supportsSystemRole,
     supportsToolCall: caps.supportsToolCall,
     supportsJsonMode: caps.supportsJsonMode,

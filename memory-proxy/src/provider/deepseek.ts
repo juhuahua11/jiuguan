@@ -25,6 +25,7 @@ export class DeepSeekProvider extends OpenAIProvider {
   getCapabilities(): ProviderCapabilities {
     return {
       contextWindow: 131072,
+      maxOutputTokens: this.getMaxOutputTokens(),
       supportsSystemRole: true,
       supportsToolCall: true,
       supportsJsonMode: true,

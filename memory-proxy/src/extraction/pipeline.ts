@@ -47,6 +47,7 @@ import { buildRelationshipStatePrompt, parseRelationshipStateResponse } from './
 import { computeIntensityDelta } from './relationship-engine.js';
 import { applyRelationshipSignal, getRecentRelationshipSignals } from '../storage/relationship-store.js';
 import { getCurrentState } from '../storage/current-state-store.js';
+import { invalidateGraph } from './graph-builder.js';
 
 export interface PipelineInput {
   sessionId: string;
@@ -293,6 +294,13 @@ export async function runExtractionPipeline(input: PipelineInput): Promise<Extra
     }
   } catch (err: any) {
     report.errors.push(err.message);
+  }
+
+  // Invalidate the in-memory graph cache so the next retrieval picks up
+  // newly extracted facts/events/relationships. Without this, the graph
+  // is built once and never refreshed — BFS path returns stale data.
+  if (report.writes_succeeded > 0) {
+    invalidateGraph(input.sessionId);
   }
 
   report.duration_ms = Date.now() - startTime;
