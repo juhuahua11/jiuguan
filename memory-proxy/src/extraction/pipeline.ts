@@ -42,6 +42,7 @@ import { insertFact } from '../storage/fact-store.js';
 import { applyStatePatches } from '../storage/current-state-store.js';
 import { execQuery } from '../storage/db.js';
 import { indexFactKeywords } from '../storage/fact-keyword-indexer.js';
+import { indexEventKeywords } from '../storage/event-keyword-indexer.js';
 import { insertEvent } from '../storage/event-store.js';
 import { buildRelationshipStatePrompt, parseRelationshipStateResponse } from './relationship-state-extraction.js';
 import { computeIntensityDelta } from './relationship-engine.js';
@@ -168,7 +169,7 @@ export async function runExtractionPipeline(input: PipelineInput): Promise<Extra
             const resolvedParticipants = (ev.participants || []).map((p: string) =>
               resolveEntityId(factEventResolver, input.sessionId, p, input.round)
             );
-            insertEvent({
+            const inserted = insertEvent({
               session_id: input.sessionId,
               description: ev.description || '',
               participants: JSON.stringify(resolvedParticipants),
@@ -179,6 +180,10 @@ export async function runExtractionPipeline(input: PipelineInput): Promise<Extra
               causes: ev.causes ? JSON.stringify(ev.causes) : undefined,
               trace_id: runId,
             });
+            // V4.2: index event description for keyword-based retrieval
+            if (ev.description) {
+              indexEventKeywords(inserted.id, ev.description);
+            }
             report.events_extracted++;
             report.writes_succeeded++;
           } catch {

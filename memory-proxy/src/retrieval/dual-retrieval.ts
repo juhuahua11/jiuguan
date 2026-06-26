@@ -1,5 +1,5 @@
 import { QueryContext } from '../types/retrieval.js';
-import { searchFactsByKeywords } from './semantic-search.js';
+import { searchFactsByKeywords, searchEventsByKeywords } from './semantic-search.js';
 import type { KeywordContext } from './keyword-extractor.js';
 import { getSessionGraph } from '../extraction/graph-builder.js';
 import { getFact } from '../storage/fact-store.js';
@@ -25,19 +25,31 @@ export async function dualRetrieve(
 ): Promise<RetrievalItem[]> {
   const items: Map<string, RetrievalItem> = new Map();
 
-  // Path 1: Keyword Search
+  // Path 1: Keyword Search (facts + events)
   if (keywordCtx.search_terms.length > 0) {
-    const keywordResults = await searchFactsByKeywords(sessionId, keywordCtx, topK);
-
-    for (const item of keywordResults) {
+    const factResults = await searchFactsByKeywords(sessionId, keywordCtx, topK);
+    for (const item of factResults) {
       items.set(`fact:${item.id}`, {
-        id: item.id,
-        type: 'fact',
-        content: item.content,
-        score: item.score,
-        source: 'semantic',
-        tier: item.tier as 1 | 2 | 3,
+        id: item.id, type: 'fact', content: item.content,
+        score: item.score, source: 'semantic', tier: item.tier as 1 | 2 | 3,
       });
+    }
+
+    // V4.2: keyword-based event search — previously events were only reachable
+    // via graph BFS, meaning events without entity-name mentions were invisible.
+    const eventResults = searchEventsByKeywords(sessionId, keywordCtx, topK);
+    for (const item of eventResults) {
+      const key = `event:${item.id}`;
+      const existing = items.get(key);
+      if (existing) {
+        existing.score = Math.max(existing.score, item.score);
+        if (item.score > existing.score) existing.source = 'semantic';
+      } else {
+        items.set(key, {
+          id: item.id, type: 'event', content: item.content,
+          score: item.score, source: 'semantic', tier: item.tier as 1 | 2 | 3,
+        });
+      }
     }
   }
 

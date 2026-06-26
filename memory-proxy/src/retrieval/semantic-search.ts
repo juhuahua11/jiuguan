@@ -125,6 +125,101 @@ function computeRecency(ageDays: number, factType: string): number {
   }
 }
 
+// ── Event keyword search (V4.2) ──
+
+export interface ScoredEvent {
+  id: string;
+  type: 'event';
+  content: string;
+  score: number;
+  tier: number;
+  source: 'semantic';
+}
+
+/**
+ * Search events by keywords using event_keywords index.
+ * Mirrors searchFactsByKeywords for the events table.
+ */
+export function searchEventsByKeywords(
+  sessionId: string,
+  keywordCtx: KeywordContext,
+  topK: number = 20
+): ScoredEvent[] {
+  const allTerms = keywordCtx.search_terms;
+  if (allTerms.length === 0) return [];
+
+  const placeholders = allTerms.map(() => '?').join(', ');
+  const sql = `
+    SELECT e.id, e.description, e.significance, e.created_at,
+           COUNT(*) AS hit_count,
+           GROUP_CONCAT(ek.keyword) AS matched_keywords
+    FROM events e
+    JOIN event_keywords ek ON ek.event_id = e.id
+    WHERE e.session_id = ?
+      AND ek.keyword IN (${placeholders})
+    GROUP BY e.id
+    ORDER BY hit_count DESC
+    LIMIT ?
+  `;
+  const params: (string | number)[] = [sessionId, ...allTerms, topK * 3];
+  const rows = execQuery(sql, params);
+
+  const scored: ScoredEvent[] = [];
+  for (const row of rows) {
+    const result = classifyEventScore(row, keywordCtx);
+    if (result) scored.push(result);
+  }
+
+  scored.sort((a, b) => {
+    if (Math.abs(a.score - b.score) > 0.01) return b.score - a.score;
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    return a.id.localeCompare(b.id);
+  });
+
+  return scored.slice(0, topK);
+}
+
+function classifyEventScore(row: any, ctx: KeywordContext): ScoredEvent | null {
+  const description: string = row.description;
+
+  let tier = 2;
+  let matchedEntities = 0;
+  for (const entity of ctx.entities) {
+    if (description.includes(entity)) {
+      tier = 1;
+      matchedEntities++;
+    }
+  }
+
+  const tierWeight = tier === 1 ? 3.0 : 2.0;
+  let entityHitBonus = 1.0;
+  if (tier === 1) {
+    if (matchedEntities >= 3) entityHitBonus = 2.0;
+    else if (matchedEntities >= 2) entityHitBonus = 1.5;
+  }
+
+  // Significance weighting: CRITICAL events rank higher
+  const sigWeight =
+    row.significance === 'CRITICAL' ? 1.5 :
+    row.significance === 'HIGH' ? 1.2 :
+    row.significance === 'MEDIUM' ? 1.0 : 0.8;
+
+  // Recency decay
+  const ageDays = (Date.now() - (row.created_at || 0)) / (1000 * 60 * 60 * 24);
+  const recency = 1.0 / (1 + ageDays / 30);
+
+  const score = tierWeight * entityHitBonus * sigWeight * recency;
+
+  return {
+    id: row.id,
+    type: 'event',
+    content: description,
+    score,
+    tier,
+    source: 'semantic',
+  };
+}
+
 // ============================================================
 // Deprecated V1 stubs — kept for backward compat, unused in V4.1
 // ============================================================

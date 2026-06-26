@@ -304,6 +304,18 @@ function runMigrations(): void {
   `);
   db.run('CREATE INDEX IF NOT EXISTS idx_fact_keywords_kw ON fact_keywords(keyword)');
   db.run('CREATE INDEX IF NOT EXISTS idx_fact_keywords_fact ON fact_keywords(fact_id)');
+
+  // V4.2: event_keywords index table for keyword-based event retrieval
+  db.run(`
+    CREATE TABLE IF NOT EXISTS event_keywords (
+      event_id TEXT NOT NULL,
+      keyword TEXT NOT NULL,
+      PRIMARY KEY (event_id, keyword),
+      FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+    )
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_event_keywords_kw ON event_keywords(keyword)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_event_keywords_evt ON event_keywords(event_id)');
 }
 
 export function getDatabase(): SqlJsDatabase {
