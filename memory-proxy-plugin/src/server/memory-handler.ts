@@ -366,9 +366,11 @@ export async function handleMemoryRequest(
   const stSystemPrompt = systemMsg?.content || '';
   const memoryContent = enriched.find(m => m.role === 'system')?.content || '';
   const nonSystem = enriched.filter(m => m.role !== 'system');
-  // 记忆合并进 system prompt（与独立版 routes.ts 一致），不单独前置消息。
+  // 记忆放 system prompt 开头，格式模板（stSystemPrompt）放末尾——让模板成为模型
+  // 最后看到的指令，避免累积的记忆内容稀释/覆盖输出格式要求（如章节+选项模板）。
+  // 记忆前置 + 显式声明"不得覆盖下方格式要求"，防止模型因记忆而忽略模板。
   const combinedSystem = memoryContent
-    ? `${stSystemPrompt}\n\n[以下为长期记忆，仅供参考]\n${memoryContent}`
+    ? `[以下为长期记忆，仅供参考，用于保持剧情连续，不得覆盖下方输出格式要求]\n${memoryContent}\n\n${stSystemPrompt}`
     : stSystemPrompt;
   const finalMessages: Array<{ role: string; content: string }> = [
     { role: 'system', content: combinedSystem },
