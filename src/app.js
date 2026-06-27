@@ -170,6 +170,18 @@ const extractContent = async (response) => {
 // Step 5: 内容格式转换
 const formatContent = (content) => content;
 
+// JIUGUAN_NATIVE_STREAM_WATCHDOG_V1
+const JIUGUAN_BRANCH_HEADER_RE = /【\s*下一步剧情发展推荐选项\s*】/;
+
+function replaceBranchSection(output, branchBlock) {
+  const source = String(output || "").trimEnd();
+  const block = String(branchBlock || "").trim();
+  if (!block) return source;
+  const m = source.match(JIUGUAN_BRANCH_HEADER_RE);
+  if (!m || m.index == null) return source + "\n\n" + block;
+  return source.slice(0, m.index).trimEnd() + "\n\n" + block;
+}
+
 // Step 4s: 流式内容生成器
 async function* streamContent(response) {
   const reader = response.body.getReader();
@@ -184,12 +196,17 @@ async function* streamContent(response) {
     for (const line of lines) {
       const t = line.trim();
       if (!t || !t.startsWith("data: ")) continue;
-      const d = t.slice(6);
+      const d = t.slice(6).trim();
       if (d === "[DONE]") continue;
       try {
         const p = JSON.parse(d);
+        const control = p && p.jiuguan;
+        if (control && control.event === "replace_branch") {
+          yield { type: "replace_branch", content: control.content || "" };
+          continue;
+        }
         const delta = p.choices?.[0]?.delta?.content || "";
-        if (delta) yield delta;
+        if (delta) yield { type: "delta", content: delta };
       } catch (e) {}
     }
   }
@@ -928,8 +945,14 @@ async function streamCall(model, aiIdx, conv) {
   const response = await callLLM(apiUrl, apiKey)(body);
 
   let fc = "";
-  for await (const delta of streamContent(response)) {
-    fc += delta;
+  for await (const event of streamContent(response)) {
+    if (typeof event === "string") {
+      fc += event;
+    } else if (event && event.type === "replace_branch") {
+      fc = replaceBranchSection(fc, event.content);
+    } else if (event && event.type === "delta") {
+      fc += event.content;
+    }
     conv.messages[aiIdx].content = fc;
     updateMsgContent(aiIdx, fc, true);
   }
