@@ -133,7 +133,8 @@ const MAX_GRAPH_CACHE = 32;
 
 function evictLRU() {
   if (sessionGraphs.size <= MAX_GRAPH_CACHE) return;
-  // Map keys iterate in insertion order — first key is LRU
+  // Map keys iterate in insertion order. Since we delete+re-set on every
+  // get, the first key is genuinely least-recently-used (not just oldest).
   const oldest = sessionGraphs.keys().next().value;
   if (oldest !== undefined) {
     sessionGraphs.delete(oldest);
@@ -143,14 +144,18 @@ function evictLRU() {
 
 export function getSessionGraph(sessionId: string): GraphStore {
   let store = sessionGraphs.get(sessionId);
-  if (!store) {
-    store = new GraphStore();
-    const t0 = Date.now();
-    buildGraph(sessionId, store);
-    console.log(`[MemoryProxy] Graph built for session=${sessionId.slice(0, 40)} — nodes=${store.nodeCount} edges=${store.edgeCount} (${Date.now() - t0}ms)`);
+  if (store) {
+    // Move to end of Map to mark as most-recently-used (true LRU)
+    sessionGraphs.delete(sessionId);
     sessionGraphs.set(sessionId, store);
-    evictLRU();
+    return store;
   }
+  store = new GraphStore();
+  const t0 = Date.now();
+  buildGraph(sessionId, store);
+  console.log(`[MemoryProxy] Graph built for session=${sessionId.slice(0, 40)} — nodes=${store.nodeCount} edges=${store.edgeCount} (${Date.now() - t0}ms)`);
+  sessionGraphs.set(sessionId, store);
+  evictLRU();
   return store;
 }
 

@@ -42,8 +42,9 @@ export async function dualRetrieve(
       const key = `event:${item.id}`;
       const existing = items.get(key);
       if (existing) {
+        const oldScore = existing.score;
         existing.score = Math.max(existing.score, item.score);
-        if (item.score > existing.score) existing.source = 'semantic';
+        if (item.score > oldScore) existing.source = 'semantic';
       } else {
         items.set(key, {
           id: item.id, type: 'event', content: item.content,
@@ -89,10 +90,17 @@ export async function dualRetrieve(
         if (rows.length > 0) {
           const event = rows[0];
           const graphScore = baseScore * edge.weight;
-          items.set(`event:${event.id}`, {
-            id: event.id, type: 'event', content: event.description,
-            score: graphScore, source: 'graph', tier: 1,
-          });
+          const key = `event:${event.id}`;
+          const existing = items.get(key);
+          if (existing) {
+            existing.score += graphScore;
+            existing.source = 'both';
+          } else {
+            items.set(key, {
+              id: event.id, type: 'event', content: event.description,
+              score: graphScore, source: 'graph', tier: 1,
+            });
+          }
         }
       }
 

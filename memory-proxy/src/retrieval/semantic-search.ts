@@ -14,11 +14,11 @@ export interface ScoredFact {
  * Search facts by keywords using fact_keywords index.
  * SQL returns hit_count + matched_keywords for scoring without re-scanning.
  */
-export async function searchFactsByKeywords(
+export function searchFactsByKeywords(
   sessionId: string,
   keywordCtx: KeywordContext,
   topK: number = 20
-): Promise<ScoredFact[]> {
+): ScoredFact[] {
   const allTerms = keywordCtx.search_terms;
   if (allTerms.length === 0) return [];
 
@@ -64,29 +64,25 @@ export async function searchFactsByKeywords(
  *   - Only entities and keywords (original, not synonyms) determine tier
  *   - implicit_topics do NOT participate — topicBoost is reserved at 1.0 for future embedding re-rank
  */
-function classifyAndScore(row: any, ctx: KeywordContext): ScoredFact | null {
-  const statement: string = row.statement;
-
-  // Tier classification (entity > keyword only; search_terms not considered)
+/** Shared tier + entity-bonus classification used by both fact and event scoring. */
+function classifyTier(text: string, ctx: KeywordContext): { tier: number; tierWeight: number; entityHitBonus: number } {
   let tier = 2;
-  const matchedEntities: string[] = [];
-
+  let matched = 0;
   for (const entity of ctx.entities) {
-    if (statement.includes(entity)) {
-      tier = 1;
-      matchedEntities.push(entity);
-    }
+    if (text.includes(entity)) { tier = 1; matched++; }
   }
-
-  // tier weight
   const tierWeight = tier === 1 ? 3.0 : 2.0;
-
-  // Entity hit count bonus (Tier 1 only)
   let entityHitBonus = 1.0;
   if (tier === 1) {
-    if (matchedEntities.length >= 3) entityHitBonus = 2.0;
-    else if (matchedEntities.length >= 2) entityHitBonus = 1.5;
+    if (matched >= 3) entityHitBonus = 2.0;
+    else if (matched >= 2) entityHitBonus = 1.5;
   }
+  return { tier, tierWeight, entityHitBonus };
+}
+
+function classifyAndScore(row: any, ctx: KeywordContext): ScoredFact | null {
+  const statement: string = row.statement;
+  const { tier, tierWeight, entityHitBonus } = classifyTier(statement, ctx);
 
   // Implicit topic boost — RESERVED at 1.0 for future embedding re-rank
   const topicBoost = 1.0;
@@ -181,22 +177,7 @@ export function searchEventsByKeywords(
 
 function classifyEventScore(row: any, ctx: KeywordContext): ScoredEvent | null {
   const description: string = row.description;
-
-  let tier = 2;
-  let matchedEntities = 0;
-  for (const entity of ctx.entities) {
-    if (description.includes(entity)) {
-      tier = 1;
-      matchedEntities++;
-    }
-  }
-
-  const tierWeight = tier === 1 ? 3.0 : 2.0;
-  let entityHitBonus = 1.0;
-  if (tier === 1) {
-    if (matchedEntities >= 3) entityHitBonus = 2.0;
-    else if (matchedEntities >= 2) entityHitBonus = 1.5;
-  }
+  const { tier, tierWeight, entityHitBonus } = classifyTier(description, ctx);
 
   // Significance weighting: CRITICAL events rank higher
   const sigWeight =

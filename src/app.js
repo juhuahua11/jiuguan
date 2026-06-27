@@ -466,7 +466,7 @@ function clearMemory() {
     toast("当前对话无记忆数据");
     return;
   }
-  c.memory = { shortTerm: [], longTerm: [], lastMergedRound: 0 };
+  c.memory = { shortTerm: [], longTerm: [], mergedRounds: [], skippedRounds: [] };
   save(c);
   renderMsgs();
   toast("记忆已清除");
@@ -693,13 +693,20 @@ function recallMsg(i) {
   if (c.memory) {
     const totalRounds = c.messages.filter(function(m) { return m.role === "user"; }).length;
     c.memory.shortTerm = c.memory.shortTerm.filter(function(s) { return s.round <= totalRounds; });
-    if (c.memory.lastMergedRound > totalRounds) {
+    // Filter mergedRounds (new format) or lastMergedRound (old compat)
+    if (Array.isArray(c.memory.mergedRounds)) {
+      c.memory.mergedRounds = c.memory.mergedRounds.filter(function(r) { return r <= totalRounds; });
+    } else if (c.memory.lastMergedRound > totalRounds) {
       c.memory.lastMergedRound = totalRounds;
-      c.memory.longTerm = c.memory.longTerm.filter(function(l) {
-        var parts = l.roundsCovered.split("-");
-        return parseInt(parts[parts.length - 1]) <= totalRounds;
-      });
     }
+    if (Array.isArray(c.memory.skippedRounds)) {
+      c.memory.skippedRounds = c.memory.skippedRounds.filter(function(r) { return r <= totalRounds; });
+    }
+    c.memory.longTerm = c.memory.longTerm.filter(function(l) {
+      var parts = l.roundsCovered.split("-");
+      return parseInt(parts[parts.length - 1]) <= totalRounds;
+    });
+    console.log('[memory-palace] recall: pruned STMs+LTMs beyond round ' + totalRounds + ', mergedRounds=' + (c.memory.mergedRounds || []).length + ' skippedRounds=' + (c.memory.skippedRounds || []).length);
   }
   c.updatedAt = Date.now();
   save(c);
@@ -725,7 +732,12 @@ function retryMsg(i) {
     if (c.memory) {
       var tr2 = c.messages.filter(function(m) { return m.role === "user"; }).length;
       c.memory.shortTerm = c.memory.shortTerm.filter(function(s) { return s.round <= tr2; });
-      if (c.memory.lastMergedRound > tr2) c.memory.lastMergedRound = tr2;
+      if (Array.isArray(c.memory.mergedRounds)) {
+        c.memory.mergedRounds = c.memory.mergedRounds.filter(function(r) { return r <= tr2; });
+      } else if (c.memory.lastMergedRound > tr2) c.memory.lastMergedRound = tr2;
+      if (Array.isArray(c.memory.skippedRounds)) {
+        c.memory.skippedRounds = c.memory.skippedRounds.filter(function(r) { return r <= tr2; });
+      }
       c.memory.longTerm = c.memory.longTerm.filter(function(l) {
         var parts = l.roundsCovered.split("-");
         return parseInt(parts[parts.length - 1]) <= tr2;
@@ -747,7 +759,12 @@ function retryUserMsg(i) {
   if (c.memory) {
     var tr3 = c.messages.filter(function(m) { return m.role === "user"; }).length;
     c.memory.shortTerm = c.memory.shortTerm.filter(function(s) { return s.round <= tr3; });
-    if (c.memory.lastMergedRound > tr3) c.memory.lastMergedRound = tr3;
+    if (Array.isArray(c.memory.mergedRounds)) {
+      c.memory.mergedRounds = c.memory.mergedRounds.filter(function(r) { return r <= tr3; });
+    } else if (c.memory.lastMergedRound > tr3) c.memory.lastMergedRound = tr3;
+    if (Array.isArray(c.memory.skippedRounds)) {
+      c.memory.skippedRounds = c.memory.skippedRounds.filter(function(r) { return r <= tr3; });
+    }
     c.memory.longTerm = c.memory.longTerm.filter(function(l) {
       var parts = l.roundsCovered.split("-");
       return parseInt(parts[parts.length - 1]) <= tr3;

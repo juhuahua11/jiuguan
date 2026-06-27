@@ -244,18 +244,20 @@ export async function handleMemoryRequest(
     refreshKeywordCache(messages, async (prompt: string) => {
       const kwApiKey = extractionApiKey || apiKey;
       if (!kwApiKey) return '';
+      const kwModel = (extractionModel || model) as string;
       const opts: Record<string, unknown> = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${kwApiKey}` },
         body: JSON.stringify({
-          model: extractionModel || model,
+          model: kwModel,
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 1024,
           temperature: 0,
-          // v4 reasoning models may emit the answer in reasoning_content and
-          // leave content empty when reasoning_effort is unset. Pin to 'low'
-          // so the model actually writes a parseable JSON in content.
-          reasoning_effort: 'low',
+          // Only set reasoning_effort for v4/reasoning-class models.
+          // Non-reasoning APIs may reject the unknown parameter.
+          ...(kwModel.includes('v4') || kwModel.includes('reasoning')
+            ? { reasoning_effort: 'low' as const }
+            : {}),
         }),
       };
       if (upstreamAgent) opts.agent = upstreamAgent;
@@ -799,25 +801,26 @@ function scheduleExtraction(
       const llmCall = async (prompt: string) => {
         const llmApiKey = extractionApiKey || apiKey;
         if (!llmApiKey) return '';
+        const llmModel = (extractionModel || model) as string;
         try {
           const fetchOptions: Record<string, unknown> = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmApiKey}` },
             body: JSON.stringify({
-              model: extractionModel || model,
+              model: llmModel,
               messages: [{ role: 'user', content: prompt }],
               max_tokens: 16384,  // v4 models output reasoning_content, need more headroom
               temperature: 0,
-              // v4 reasoning models (deepseek-v4-flash/pro) put the actual answer in
-              // reasoning_content and leave message.content empty when the thinking
-              // budget is exhausted. Pin reasoning_effort low so the model spends the
-              // minimum on thinking and actually emits a parseable JSON in content.
-              reasoning_effort: 'low',
+              // Only set reasoning_effort for v4/reasoning-class models.
+              // Non-reasoning APIs may reject the unknown parameter with HTTP 400.
+              ...(llmModel.includes('v4') || llmModel.includes('reasoning')
+                ? { reasoning_effort: 'low' as const }
+                : {}),
             }),
           };
           if (upstreamAgent) fetchOptions.agent = upstreamAgent;
           const llmUrl = `${extractionUrl}${extractionPath}`;
-          console.log('[MemoryProxy] Extraction LLM call →', llmUrl, 'model:', extractionModel || model, 'promptLen:', prompt.length);
+          console.log('[MemoryProxy] Extraction LLM call →', llmUrl, 'model:', llmModel, 'promptLen:', prompt.length);
           const res = await fetch(llmUrl, fetchOptions as RequestInit);
           console.log('[MemoryProxy] Extraction LLM status:', res.status, 'contentType:', res.headers.get('content-type'));
           if (!res.ok) {

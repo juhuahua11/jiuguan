@@ -6,16 +6,18 @@
 async function callSummaryAPI(messages, settings, maxTokensOverride) {
   const { apiUrl, apiKey, modelName } = settings;
   const url = apiUrl.replace(/\/chat\/completions\/?$/, "") + "/chat/completions";
-  const body = {
+  var body = {
     model: modelName,
     messages: messages,
     stream: false,
     temperature: 0,
     max_tokens: maxTokensOverride || 2000,
-    // v4 reasoning models may emit the answer in reasoning_content and
-    // leave content empty. Pin to 'low' so the model writes to content.
-    reasoning_effort: 'low',
   };
+  // Only set reasoning_effort for models that support it (v4/reasoning class).
+  // Non-reasoning APIs may reject the unknown parameter with HTTP 400.
+  if (modelName && (modelName.indexOf('v4') !== -1 || modelName.indexOf('reasoning') !== -1)) {
+    body.reasoning_effort = 'low';
+  }
   const r = await fetch(url, {
     method: "POST",
     headers: {
@@ -122,7 +124,7 @@ function extractJSON(raw) {
   for (var i = 0; i < strategies.length; i++) {
     try {
       var result = strategies[i](text);
-      if (result && typeof result === 'object') {
+      if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
         if (i > 0) console.log('[memory-palace] JSON strategy ' + (i + 1) + ' succeeded (fallback from strategy 1)');
         return result;
       }
@@ -184,7 +186,7 @@ async function mergeToLTM(conv, stms, settings) {
 // ── 初始化记忆结构 ──
 function ensureMemory(conv) {
   if (!conv.memory) {
-    conv.memory = { shortTerm: [], longTerm: [], mergedRounds: [] };
+    conv.memory = { shortTerm: [], longTerm: [], mergedRounds: [], skippedRounds: [] };
   }
   // 迁移旧格式：lastMergedRound → mergedRounds[]
   // 旧版本用单一阈值标记已合并轮次，新版本用显式集合避免断层
@@ -198,6 +200,10 @@ function ensureMemory(conv) {
     conv.memory.mergedRounds = migrated;
     console.log('[memory-palace] format migrated: lastMergedRound=' + conv.memory.lastMergedRound + ' → mergedRounds=[' + migrated.join(',') + ']');
     delete conv.memory.lastMergedRound;
+  }
+  // 确保新字段存在（向前兼容旧数据）
+  if (!Array.isArray(conv.memory.skippedRounds)) {
+    conv.memory.skippedRounds = [];
   }
   return conv.memory;
 }
@@ -267,15 +273,46 @@ async function triggerMemoryUpdate(conv, settings) {
     conv.memory.shortTerm.push(stm);
     console.log('[memory-palace] STM generated: round=' + round + ' chars=' + stm.characters.length + ' event="' + (stm.keyEvent || '').slice(0, 60) + '" | STM pool: ' + conv.memory.shortTerm.length + ' total');
 
-    // 未合并的 STM（用 mergedRounds 集合替代单一 lastMergedRound 阈值，
+    // 未合并的 STM（用 mergedRounds + skippedRounds 集合替代单一阈值，
     // 避免 STM 有失败轮次时 unmerged.slice(-7) 跨断层导致中间轮次永久丢失）
     const mergedSet = {};
     for (var mi = 0; mi < conv.memory.mergedRounds.length; mi++) {
       mergedSet[conv.memory.mergedRounds[mi]] = true;
     }
+    for (var si2 = 0; si2 < conv.memory.skippedRounds.length; si2++) {
+      mergedSet[conv.memory.skippedRounds[si2]] = true;
+    }
     const unmerged = conv.memory.shortTerm.filter(function(s) {
       return !mergedSet[s.round];
     });
+
+    // 恢复重试：累积 ≥3 条跳过轮次时，用小批量重试合并
+    if (conv.memory.skippedRounds.length >= 3) {
+      const toRecover = conv.memory.skippedRounds.slice(0, 3);
+      const recoverySTMs = conv.memory.shortTerm.filter(function(s) {
+        return toRecover.indexOf(s.round) !== -1;
+      });
+      if (recoverySTMs.length > 0) {
+        try {
+          const recoveryLTM = await mergeToLTM(conv, recoverySTMs, settings);
+          conv.memory.longTerm.push(recoveryLTM);
+          for (var ri = 0; ri < toRecover.length; ri++) {
+            conv.memory.mergedRounds.push(toRecover[ri]);
+          }
+          conv.memory.skippedRounds = conv.memory.skippedRounds.filter(function(r) {
+            return toRecover.indexOf(r) === -1;
+          });
+          console.log('[memory-palace] LTM recovery merged: skipped rounds [' + toRecover.join(',') + '] → ' + recoveryLTM.id + ' | skippedRounds remaining: ' + conv.memory.skippedRounds.length);
+        } catch (e2) {
+          console.log('[memory-palace] LTM recovery merge also failed for rounds [' + toRecover.join(',') + '], will retry later');
+        }
+      } else {
+        // STMs 已被清理（如 swipe），清除孤立追踪
+        conv.memory.skippedRounds = conv.memory.skippedRounds.filter(function(r) {
+          return toRecover.indexOf(r) === -1;
+        });
+      }
+    }
 
     // 每 7 条合并一次（取最早的 7 条，不是最后 7 条）
     if (unmerged.length >= 7) {
@@ -289,6 +326,10 @@ async function triggerMemoryUpdate(conv, settings) {
         console.log('[memory-palace] LTM merged: rounds [' + toMerge[0].round + '-' + toMerge[toMerge.length-1].round + '] → ' + ltm.id + ' | STM pool: ' + conv.memory.shortTerm.length + ' total, ' + (unmerged.length - toMerge.length) + ' remaining unmerged, ' + conv.memory.longTerm.length + ' LTMs');
       } catch (e) {
         console.error("LTM 合并失败:", e);
+        // 移到 skippedRounds 追踪（可恢复），而非直接标记为 mergedRounds（永久丢失）。
+        // 下次累积 ≥3 条跳过轮次时用小批量重试合并。
+        conv.memory.skippedRounds.push(toMerge[0].round);
+        console.log('[memory-palace] LTM merge failed, round ' + toMerge[0].round + ' moved to skippedRounds (will retry with small batch) | skippedRounds: ' + conv.memory.skippedRounds.length);
       }
     }
   } catch (e) {
@@ -300,9 +341,10 @@ async function triggerMemoryUpdate(conv, settings) {
 // query: 可选，当前用户消息，用于关键词相关性过滤
 // 内置 token 上限防止长会话记忆撑爆上下文
 //
-// NOTE: 此函数当前不接入 LLM 注入链路。记忆宫殿定位为前端展示面板，
-// 实际的记忆注入由 memory-proxy 处理（双路检索 + 预算分配 + 连续性快照），
-// 质量更高且避免了去重/冲突问题。如需启用，在 injectSystemPrompt 中调用即可。
+// NOTE: INTENTIONALLY UNWIRED. 记忆宫殿定位为前端展示面板，记忆注入
+// 由 memory-proxy 处理（双路检索 + 预算分配 + 连续性快照）。此函数保留
+// 作为备用注入方案——token 预算/关键词过滤/LTM 优先全部就绪，如需启用
+// 在 app.js 的 injectSystemPrompt 中调用 buildMemoryPrompt(conv, query) 即可。
 var MEMORY_PROMPT_MAX_TOKENS = 2000;
 function estimateTokens(text) {
   // 中英文混合粗略估算：约 2 字符 ≈ 1 token
