@@ -1,6 +1,15 @@
 # 环境变量（含 API Key 等敏感信息）
 .env
 
-# 运行时数据
+# 运行时数据（含 API Key、用户对话记录等）
 data/
+
+# 插件本地配置（含 API Key，模板见 plugin-config.example.json）
+memory/plugin-config.json
+memory-proxy-plugin/plugin-config.json
+
+# 记忆代理运行时数据
+memory-proxy/.env
+memory-proxy/data/
+
 node_modules/

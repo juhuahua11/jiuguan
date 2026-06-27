@@ -1,5 +1,5 @@
 {
-  "workingMemoryTokens": 62000,
+  "workingMemoryTokens": 20000,
   "enabledModules": {
     "canon": true,
     "currentState": true,
@@ -9,7 +9,7 @@
     "graph": true,
     "summaries": true
   },
-  "extractionModel": "",
+  "extractionModel": "deepseek-v4-flash",
   "extractionApiKey": "",
   "extraction": {
     "maxInputTokens": 64000,

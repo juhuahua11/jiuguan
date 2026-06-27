@@ -1066,6 +1066,7 @@ dm.settingsBtn.addEventListener("click", async () => {
       document.getElementById("mpWorkingTokens").value = Number.isFinite(wt) ? wt : 32000;
       document.getElementById("mpContinuityEnabled").checked = cfg.continuity?.enabled !== false;
       document.getElementById("mpExtractionModel").value = cfg.extractionModel || "";
+      document.getElementById("mpExtractionApiKey").value = cfg.extractionApiKey || "";
     }
   } catch {}
 });
@@ -1100,12 +1101,13 @@ dm.saveSettingsBtn.addEventListener("click", () => {
   state.settings.topP = dm.topPEl.value.trim();
   state.settings.frequencyPenalty = dm.freqPenaltyEl.value.trim();
   state.settings.presencePenalty = dm.presPenaltyEl.value.trim();
-  // 提交 MP 配置到 /api/memory/config（开关 + working tokens + 抽取模型）
+  // 提交 MP 配置到 /api/memory/config（开关 + working tokens + 抽取模型 + API Key）
   try {
     const wt = parseInt(document.getElementById("mpWorkingTokens").value, 10);
     const mpBody = {
       workingMemoryTokens: Number.isFinite(wt) ? wt : 32000,
       extractionModel: document.getElementById("mpExtractionModel").value.trim(),
+      extractionApiKey: document.getElementById("mpExtractionApiKey").value.trim(),
       enabledModules: { canon: document.getElementById("mpEnabled").checked },
       continuity: { enabled: document.getElementById("mpContinuityEnabled").checked },
     };

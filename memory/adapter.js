@@ -11,7 +11,7 @@ const PLUGIN_DIR = path.join(__dirname);
 const CONFIG_PATH = path.join(PLUGIN_DIR, 'plugin-config.json');
 const CAPS_PATH = path.join(__dirname, '..', 'data', 'memory-caps.json');
 const SYSTEM_PROMPT_SOURCE_PATH = path.join(__dirname, '..', 'src', 'system-prompt.js');
-const DEFAULT_CONFIG = require('./plugin-config.json');
+const DEFAULT_CONFIG = require('./plugin-config.example.json');
 
 let brain = null;
 let initialized = false;
