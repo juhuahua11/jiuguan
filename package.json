@@ -5,7 +5,8 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node server-start.js"
+    "start": "node scripts/patch-app-stream-watchdog.js && node server-start.js",
+    "build": "node build.js"
   },
   "dependencies": {
     "memory-proxy-plugin": "file:./memory-proxy-plugin",
