@@ -1,4 +1,8 @@
 const fs = require('fs');
+const patchAppStreamWatchdog = require('./scripts/patch-app-stream-watchdog.js');
+
+patchAppStreamWatchdog();
+
 const css = fs.readFileSync('src/style.css', 'utf8');
 const body = fs.readFileSync('src/body.html', 'utf8');
 const prompt = fs.readFileSync('src/system-prompt.js', 'utf8');
