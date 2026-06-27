@@ -1,33 +1,41 @@
 # jiuguan
 
-`jiuguan` 是一个面向 AI 互动小说 / 酒馆式角色扮演的本地 Web 应用。它以 Node.js HTTP 服务为入口，提供聊天、小说续写、长期记忆、世界书参考、章节分支选项和可选 AI 配图能力。
+`jiuguan` 是一个面向 AI 互动小说 / 酒馆式角色扮演的本地 Web 应用。
 
-项目的核心目标是：
+它的核心目标不是做普通聊天，而是支持长篇 RP、小说续写、世界书参考、长期记忆、剧情连续性和固定章节输出格式。
 
-- 支持把长篇小说、设定集或世界书作为参考资料，让模型在其基础上继续创作；
-- 通过 `memory-proxy` / `memory-proxy-plugin` 注入长期记忆，维持角色、剧情、关系和事件连续性；
-- 用 jiuguan Prompt Compiler 锁定输出格式，降低长上下文和记忆注入导致的提示词漂移；
-- 每章输出后稳定生成 4 个剧情发展分支，供玩家继续选择。
+当前项目已经接入：
+
+- 本地 Node.js Web 服务；
+- DeepSeek 风格 Chat Completions API；
+- `memory-proxy` / `memory-proxy-plugin` 长期记忆系统；
+- Prompt Compiler，用于稳定世界书、记忆、系统提示词之间的优先级；
+- 流式输出 watchdog，用于修复剧情分支格式；
+- 前端原生 `replace_branch` 支持，用于在流式输出结束时替换错误分支区；
+- 可选 quick AIdraw 本地配图能力。
 
 ---
 
-## 功能概览
+## 当前项目定位
 
-### AI 小说 / 酒馆式聊天
+`jiuguan` 适合以下场景：
 
-- 支持多轮对话与本地会话保存。
-- 支持流式输出。
-- 默认面向 DeepSeek 风格的 Chat Completions API。
-- 内置小说章节输出模板：章节标题、正文、分隔线、四个剧情选项。
+- 把整本小说、世界书、角色设定或长篇背景资料作为参考；
+- 让模型在原文世界观和文风基础上进行二创；
+- 进行酒馆式角色扮演、互动小说、长线剧情推进；
+- 希望模型在每章末尾稳定输出四个剧情发展选项；
+- 希望长期记忆记录角色状态、关系、事件、伏笔和世界设定。
 
-### 长期记忆系统
+它不是一个纯前端聊天 Demo，而是一个本地长期运行型 AI RP 系统。
 
-项目通过 `memory/adapter.js` 接入 `memory-proxy-plugin`，再由插件调用 `memory-proxy` 的长期记忆能力。
+---
 
-当前记忆链路大致是：
+## 当前架构
 
 ```text
-jiuguan /api/chat
+浏览器前端
+  ↓
+Node.js server.js
   ↓
 memory/adapter.js
   ↓
@@ -35,102 +43,37 @@ memory-proxy-plugin
   ↓
 memory-proxy core
   ↓
-上游模型 API
+上游 Chat Completions API
 ```
 
-记忆系统用于保持：
+主要链路说明：
 
-- 角色状态；
-- 人物关系；
-- 重要事件；
-- 世界设定；
-- 长对话中的连续性。
-
-### 世界书 / 整本小说参考
-
-jiuguan 支持用户在开局上传较长文本，例如：
-
-- 整本小说；
-- 世界观文档；
-- 角色设定；
-- 原著剧情；
-- 长篇背景资料。
-
-为了避免长文本覆盖系统输出规则，`memory/adapter.js` 中的 Prompt Compiler 会把长文本包装为 reference-only worldbook，并对超长文本做头尾保留式预算裁剪。
-
-默认世界书预算：
-
-```text
-JIUGUAN_WORLDBOOK_MAX_CHARS = 48000
-```
-
-低于该预算时全文保留；超过时保留头部和尾部，中间省略，防止模型把整本小说当成高优先级指令。
-
-### Prompt Compiler
-
-Prompt Compiler 是 jiuguan 的提示词优先级控制层。
-
-它会把上下文分成以下优先级：
-
-```text
-LEVEL 0 输出格式与创作规则
-  > 当前玩家任务
-  > 世界书参考
-  > memory-proxy 记忆 / 连续性上下文
-  > 历史对话
-```
-
-LEVEL 0 会强制要求每章输出：
-
-1. 章节标题；
-2. 小说正文；
-3. 分隔线；
-4. `【下一步剧情发展推荐选项】`；
-5. 正好四个选项：`选项 A`、`选项 B`、`选项 C`、`选项 D`。
-
-### AI 配图
-
-项目可选对接本地 `quick AIdraw`：
-
-- 通过 Node.js 调用 Python 子进程；
-- 支持从 AI 回复中提炼绘图 prompt；
-- 支持本地绘图引擎；
-- 输出图片保存到数据目录下的 `illustrations`。
-
----
-
-## 技术栈
-
-- Node.js
-- CommonJS
-- 原生 `http` 服务
-- `tsx` 用于加载 TypeScript 插件代码
-- `memory-proxy-plugin`
-- `memory-proxy`
-- 可选 Python 绘图后端
+- `server.js`：本地 HTTP 服务入口，默认端口 `3111`。
+- `server-start.js`：默认启动入口，会加载 watchdog bootstrap 后再启动服务。
+- `server-watchdog-bootstrap.js`：运行时兜底注入前端 stream watchdog patch。
+- `src/app.js`：前端主逻辑，当前已原生支持 `replace_branch` 控制事件。
+- `memory/adapter.js`：jiuguan 与 memory-proxy-plugin 的桥接层，包含 Prompt Compiler、worldbook 预算、输出 watchdog。
+- `memory-proxy-plugin/`：长期记忆插件层，负责 session、关键词、continuity、提取调度和上游请求。
+- `memory-proxy/`：长期记忆核心，包括事实、事件、关系、图检索、预算分配等。
 
 ---
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 拉取并安装依赖
 
 ```bash
+git pull
 npm install
 ```
 
-### 2. 配置环境变量
+### 2. 构建前端
 
-可以通过 `.env` 或系统环境变量配置。
-
-最小配置示例：
-
-```env
-API_URL=https://api.deepseek.com/v1/chat/completions
-API_KEY=你的 API Key
-MODEL_NAME=deepseek-v4-pro
-PORT=3111
+```bash
+npm run build
 ```
+
+`npm run build` 会执行 `node build.js`，把 `src/style.css`、`src/body.html`、`src/system-prompt.js`、`src/memory.js`、`src/app.js` 等文件合并到 `index.html`。
 
 ### 3. 启动服务
 
@@ -144,29 +87,388 @@ npm start
 http://localhost:3111
 ```
 
+当前 `package.json` 中的脚本为：
+
+```json
+{
+  "start": "node scripts/patch-app-stream-watchdog.js && node server-start.js",
+  "build": "node build.js"
+}
+```
+
+说明：
+
+- `scripts/patch-app-stream-watchdog.js` 是幂等补丁脚本；如果 `src/app.js` 已经包含原生 stream watchdog，会直接跳过。
+- 当前远端 `src/app.js` 已经包含 `JIUGUAN_NATIVE_STREAM_WATCHDOG_V1`，因此补丁脚本主要作为兜底。
+- 正常启动请优先使用 `npm start`，不要直接绕过默认启动链路。
+
+---
+
+## API Key 与隐私说明
+
+仓库不应提交任何 API Key、token、私有对话数据或本地运行数据。
+
+当前 `.gitignore` 已忽略：
+
+```text
+.env
+data/
+memory/plugin-config.json
+memory-proxy-plugin/plugin-config.json
+memory-proxy/.env
+memory-proxy/data/
+node_modules/
+```
+
+建议：
+
+- API Key 只在本地前端设置面板、`.env` 或本地运行配置中填写；
+- 不要把 `.env`、`data/`、`plugin-config.json`、运行日志、对话记录提交到 GitHub；
+- 公开仓库前，建议再次搜索 `sk-`、`api_key`、`Authorization`、`token` 等关键词；
+- 如果误提交过真实密钥，应立即在供应商控制台撤销并重新生成。
+
+README 中不会给出真实 key 示例。需要配置时，请使用本地私有配置。
+
 ---
 
 ## 常用环境变量
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `PORT` | 服务端口 | `3111` |
-| `API_URL` | 上游 Chat Completions API 地址 | 空 |
-| `API_KEY` | 上游 API Key | 空 |
-| `MODEL_NAME` | 模型名称 | 空 |
-| `STREAM` | 是否流式输出，设为 `false` 可关闭 | `true` |
-| `REASONING_EFFORT` | 推理强度参数 | 空 |
-| `TEMPERATURE` | 采样温度 | 空 |
-| `MAX_TOKENS` | 最大输出 token | 空 |
-| `TOP_P` | nucleus sampling 参数 | 空 |
-| `FREQUENCY_PENALTY` | 频率惩罚 | 空 |
-| `PRESENCE_PENALTY` | 存在惩罚 | 空 |
-| `JIUGUAN_DATA_DIR` | 数据目录 | `./data` |
+| `PORT` | 本地服务端口 | `3111` |
+| `JIUGUAN_DATA_DIR` | 运行时数据目录 | `./data` |
+| `JIUGUAN_WORLDBOOK_MAX_CHARS` | 上传世界书最大注入字符数 | `48000` |
+| `JIUGUAN_OUTPUT_WATCHDOG` | 是否启用输出格式 watchdog | `true` |
+| `JIUGUAN_LLM_REPAIR_WATCHDOG` | 是否启用 LLM 二次修复分支 | `true` |
+| `JIUGUAN_REPAIR_MAX_TOKENS` | repair 请求最大输出 token | `1200` |
+| `MEMPROXY_CONTEXT_WINDOW` | memory-proxy 上下文预算 | `128000` |
+| `MEMPROXY_MAX_OUTPUT_TOKENS` | memory-proxy 输出预算 | `32000` |
 | `AIDRAW_DIR` | quick AIdraw 目录 | `../quick AIdraw` |
 | `AIDRAW_TIMEOUT_MS` | 本地绘图超时 | `600000` |
-| `MEMPROXY_CONTEXT_WINDOW` | memory-proxy 编排上下文预算 | `128000` |
-| `MEMPROXY_MAX_OUTPUT_TOKENS` | memory-proxy 输出预算 | `32000` |
-| `JIUGUAN_WORLDBOOK_MAX_CHARS` | 上传世界书最大注入字符数 | `48000` |
+
+具体模型地址、模型名、API Key 可以通过前端设置面板或本地环境变量管理，避免写死在源码中。
+
+---
+
+## 输出格式约束
+
+jiuguan 默认要求模型以小说章节形式输出，并在结尾给出固定四类剧情发展推荐选项。
+
+目标格式：
+
+```text
+[章节序号 + 章节标题]
+
+[叙事正文]
+
+---
+---
+
+【下一步剧情发展推荐选项】
+选项 A：[保守/原著型]...
+选项 B：[戏谑/博弈型]...
+选项 C：[规则/修改型]...
+选项 D：[创新/xp增加型]...
+```
+
+当前修复重点：
+
+- `src/system-prompt.js` 定义原始四类选项标签；
+- `memory/adapter.js` 会读取并校验这些选项标签；
+- 如果模型输出的分支不合格，watchdog 会触发 repair 或 fallback；
+- 后端会发送 `replace_branch` 控制事件；
+- 前端 `src/app.js` 会用 `replaceBranchSection()` 替换尾部 `【下一步剧情发展推荐选项】` 区域，而不是追加第二份分支。
+
+---
+
+## replace_branch 流式修复
+
+旧问题：
+
+```text
+模型先流式输出错误分支
+最后又追加一个正确分支
+```
+
+用户会看到两份分支，体验很差。
+
+当前方案：
+
+```text
+正文继续正常流式输出
+↓
+后端最终校验分支格式
+↓
+如果不合格，生成替换分支
+↓
+发送 replace_branch 控制事件
+↓
+前端只替换尾部分支区
+```
+
+当前 `src/app.js` 已原生支持：
+
+```js
+{ type: "replace_branch", content: "..." }
+```
+
+收到后会执行：
+
+```js
+fc = replaceBranchSection(fc, event.content);
+```
+
+这意味着正文流式体验保留，尾部分支仍可被最终修正。
+
+---
+
+## Prompt Compiler
+
+Prompt Compiler 是 jiuguan 的提示词优先级控制层。
+
+它的目标是防止：
+
+```text
+世界书太长
++ 记忆注入
++ 历史消息过多
+→ System Prompt 被稀释
+→ 输出格式漂移
+```
+
+当前优先级设计：
+
+```text
+Level 0：输出格式与创作规则
+  > 当前玩家任务
+  > 世界书参考
+  > memory-proxy 记忆 / continuity
+  > 历史对话
+```
+
+原则：
+
+- 世界书是 reference，不是高优先级命令；
+- 长期记忆是 reference，不得覆盖输出格式；
+- 当前玩家任务优先于世界书背景；
+- 四个剧情选项格式必须保持稳定。
+
+---
+
+## 世界书 / 整本小说参考
+
+jiuguan 支持开局上传长文本，例如：
+
+- 整本小说；
+- 世界观文档；
+- 角色设定；
+- 原著剧情；
+- 长篇背景资料。
+
+为了避免长文本覆盖系统输出规则，Prompt Compiler 会把超长输入包装为 reference-only worldbook，并按预算裁剪。
+
+默认预算：
+
+```text
+JIUGUAN_WORLDBOOK_MAX_CHARS = 48000
+```
+
+超过预算时采用头尾保留：
+
+```text
+保留开头
++
+保留结尾
++
+省略中间
+```
+
+原因：
+
+- 开头通常包含世界观、人物、设定基调；
+- 结尾通常包含最近剧情、状态和文风；
+- 中间全文逐字注入成本高，且容易稀释系统提示词。
+
+---
+
+## 长期记忆系统
+
+长期记忆由 `memory-proxy-plugin` 与 `memory-proxy` 共同负责。
+
+当前记忆能力包括：
+
+- facts：事实与设定；
+- events：剧情事件；
+- relationships：人物关系；
+- continuity snapshot：连续性快照；
+- keyword cache：关键词缓存；
+- graph retrieval：图检索；
+- token budget：记忆注入预算。
+
+记忆注入目标：
+
+```text
+提供剧情连续性
+但不覆盖 System Prompt
+也不挤占输出格式规则
+```
+
+健康状态下，日志中可能看到：
+
+```text
+[MemoryProxy] Memory context: ~367 tokens injected
+```
+
+这类几百 token 的注入通常是健康范围。
+
+---
+
+## 前端记忆面板说明
+
+`src/memory.js` 当前定位为前端记忆宫殿 / 展示面板 / 摘要辅助逻辑。
+
+注意：
+
+```text
+真正注入模型上下文的长期记忆由 memory-proxy 负责。
+```
+
+`src/memory.js` 中的 `buildMemoryPrompt()` 当前是备用方案，不是主注入链路。
+
+---
+
+## 记忆抽取与当前已知风险
+
+memory extraction 是后台异步任务。
+
+正常流程：
+
+```text
+对话完成
+→ 捕获模型回复
+→ scheduleExtraction()
+→ 提取 facts / events / relationships
+→ 写入 memory DB
+```
+
+为了避免并发写库，当前实现使用 `__PROCESSING__` sentinel。
+
+如果一个 extraction 正在运行，新一轮 extraction 会看到：
+
+```text
+Extraction already in-progress (sentinel is fresh), skipping extraction to avoid concurrency
+```
+
+这不代表聊天坏了，也不代表已有记忆不可用。
+
+但如果长期持续出现，说明新记忆写入可能追不上对话速度。
+
+---
+
+## [FIX: memory-extraction-backlog] 待修复项
+
+这是当前下一阶段建议重点处理的问题。
+
+### 问题
+
+当前逻辑是：
+
+```text
+extraction running
+→ 新 extraction 触发
+→ sentinel fresh
+→ skip
+```
+
+这能避免并发，但被 skip 的新内容没有进入明确队列。
+
+如果用户聊得很快，可能出现：
+
+```text
+抽取慢
+→ 新内容跳过
+→ backlog 变大
+→ 下次抽取更慢
+→ 长期记忆逐渐滞后
+```
+
+### 建议方案
+
+把：
+
+```text
+running → skip
+```
+
+改成：
+
+```text
+running → mark pending
+running finished → run catch-up extraction
+```
+
+也就是增加一个 pending extraction 机制：
+
+```text
+idle + new extraction → running
+running + new extraction → pending = true
+running complete + pending = false → idle
+running complete + pending = true → pending = false → run latest diff again
+```
+
+同时，watchdog repair 这类内部格式修复请求不应进入 memory extraction，避免增加抽取压力或污染记忆。
+
+一句话总结：
+
+```text
+[FIX: memory-extraction-backlog]
+把 memory extraction 从“正在运行就 skip”改成“正在运行就标记 pending，当前任务完成后自动补跑最新差量”，并让 watchdog repair 等内部请求绕过 extraction。
+```
+
+当前 README 将该项标记为“待修复 / 下一阶段重点”，不要误认为已经完成。
+
+---
+
+## Keyword Cache 与 Graph Retrieval
+
+当前 memory-proxy-plugin 会为每个 session 维护关键词缓存，减少每轮重新抽取关键词的成本。
+
+典型日志：
+
+```text
+getCachedOrRegexKeywords: hasMergedData=false ...
+Keyword async refresh: entities=96 keywords=5
+refreshKeywordCache: wrote merged data to cache
+getCachedOrRegexKeywords: hasMergedData=true ...
+```
+
+Graph retrieval 会把 facts、events、relationships 等记忆组织成可检索结构，用于更好地恢复角色关系、事件和状态。
+
+---
+
+## AI 配图
+
+项目可选对接本地 `quick AIdraw`：
+
+- 通过 Node.js 调用 Python 子进程；
+- 支持从 AI 回复中提炼绘图 prompt；
+- 支持本地绘图引擎；
+- 输出图片保存到数据目录下的 `illustrations/`。
+
+默认路径：
+
+```text
+../quick AIdraw
+```
+
+可通过环境变量指定：
+
+```text
+AIDRAW_DIR=本地 quick AIdraw 目录
+AIDRAW_TIMEOUT_MS=600000
+```
+
+不要把本地模型、私有素材或生成结果提交到仓库。
 
 ---
 
@@ -174,22 +476,27 @@ http://localhost:3111
 
 ```text
 jiuguan/
-├── server.js                    # Node.js 服务入口
-├── build.js                     # 前端打包脚本，将 src/* 合并为 index.html
-├── index.html                   # 已构建前端页面
+├── server.js                         # Node.js 服务入口
+├── server-start.js                   # 默认启动入口
+├── server-watchdog-bootstrap.js       # 运行时注入 stream watchdog patch 的兜底层
+├── build.js                          # 前端打包脚本
+├── index.html                        # 已构建前端页面
 ├── package.json
+├── scripts/
+│   └── patch-app-stream-watchdog.js   # 幂等前端 stream watchdog 源码补丁
 ├── src/
-│   ├── app.js                   # 前端主逻辑
-│   ├── body.html                # 前端 HTML 主体
-│   ├── memory.js                # 前端记忆面板 / 摘要辅助逻辑
-│   ├── style.css                # 前端样式
-│   └── system-prompt.js         # jiuguan 小说输出模板
+│   ├── app.js                         # 前端主逻辑，已原生支持 replace_branch
+│   ├── body.html                      # 前端 HTML 主体
+│   ├── memory.js                      # 前端记忆宫殿 / 摘要辅助逻辑
+│   ├── stream-watchdog-patch.js       # 运行时 stream watchdog patch 兜底
+│   ├── style.css                      # 前端样式
+│   └── system-prompt.js               # jiuguan 小说输出模板
 ├── memory/
-│   ├── adapter.js               # jiuguan 与 memory-proxy-plugin 的桥接层
-│   └── plugin-config.json       # memory-proxy-plugin 配置
-├── memory-proxy-plugin/         # 长期记忆插件层
-├── memory-proxy/                # 长期记忆核心
-└── data/                        # 运行时数据目录，默认自动创建
+│   ├── adapter.js                     # jiuguan 与 memory-proxy-plugin 的桥接层
+│   └── plugin-config.json             # 本地插件配置，已 gitignore
+├── memory-proxy-plugin/               # 长期记忆插件层
+├── memory-proxy/                      # 长期记忆核心
+└── data/                              # 运行时数据目录，已 gitignore
 ```
 
 ---
@@ -205,14 +512,15 @@ jiuguan/
 - `src/system-prompt.js`
 - `src/memory.js`
 - `src/app.js`
+- `src/stream-watchdog-patch.js`
 
-需要重新构建 `index.html`：
+请重新构建：
 
 ```bash
-node build.js
+npm run build
 ```
 
-然后重启或刷新页面。
+然后重启服务或刷新页面。
 
 ---
 
@@ -224,162 +532,165 @@ node build.js
 ./data
 ```
 
-其中包括：
+其中可能包括：
 
-- `settings.json`：运行时模型配置；
-- `conversations/`：对话文件；
-- `illustrations/`：配图结果；
-- `memory-caps.json`：memory-proxy 能力配置。
+- 本地设置；
+- API 配置；
+- 对话记录；
+- 记忆数据；
+- memory caps；
+- 配图结果。
 
-可通过 `JIUGUAN_DATA_DIR` 改变数据目录。
+`data/` 已在 `.gitignore` 中忽略，不应提交到 GitHub。
 
----
-
-## memory-proxy 配置
-
-主要配置文件：
+可通过环境变量指定数据目录：
 
 ```text
-memory/plugin-config.json
+JIUGUAN_DATA_DIR=本地数据目录
 ```
-
-常见字段：
-
-- `workingMemoryTokens`：工作记忆预算；
-- `enabledModules`：启用的记忆模块；
-- `extraction`：记忆提取输入限制；
-- `continuity`：连续性快照策略；
-- `handoff`：模型切换接手提示策略；
-- `debug.injectionTrace`：是否输出注入调试信息。
 
 ---
 
-## 世界书使用建议
+## 常见日志说明
 
-### 推荐方式
-
-开局上传小说或设定文档，然后在输入框补一句明确任务，例如：
+### `Chat request intercepted`
 
 ```text
-请基于这本小说的世界观、人物关系和文风，创作一个新的互动章节。
+[MemoryProxy] Chat request intercepted — model: deepseek-v4-pro, messages: 92, stream: true
 ```
 
-### 注意事项
+说明请求正常进入 memory-proxy。
 
-- 世界书会被当作参考资料，不会覆盖 jiuguan 的输出格式。
-- 如果上传文本特别长，系统会自动保留头部和尾部，中间省略。
-- 如果需要更大世界书预算，可以设置：
+### `Memory context: ~xxx tokens injected`
 
-```env
-JIUGUAN_WORLDBOOK_MAX_CHARS=80000
-```
+说明长期记忆已注入。几百 tokens 通常是健康范围。
 
-不建议无限增大该值，否则会重新引入提示词稀释问题。
+### `LLM repair produced replacement branch block`
 
----
+说明 watchdog 发现原始分支不合格，并生成了替换分支。
 
-## 输出格式约束
+### `sent branch replace event`
 
-jiuguan 默认要求模型按以下格式输出：
+说明后端已经发送 `replace_branch` 控制事件。当前前端应能原生处理该事件。
 
-```text
-[章节序号 + 章节标题]
+### `Extraction already in-progress`
 
-[叙事正文]
+说明已有记忆抽取任务正在运行，新 extraction 为避免并发被跳过。
 
----
----
-
-【下一步剧情发展推荐选项】
-选项 A：[保守 / 原著型]
-选项 B：[戏谑 / 博弈型]
-选项 C：[规则 / 修改型]
-选项 D：[创新 / xp 增加型]
-```
-
-Prompt Compiler 会把该格式作为最高优先级规则，避免被 memory 或 worldbook 覆盖。
-
----
-
-## AI 配图配置
-
-默认 quick AIdraw 路径：
-
-```text
-../quick AIdraw
-```
-
-期望结构：
-
-```text
-quick AIdraw/
-├── python/
-│   └── python.exe
-└── generate.py
-```
-
-可通过环境变量指定：
-
-```env
-AIDRAW_DIR=D:\path\to\quick AIdraw
-AIDRAW_TIMEOUT_MS=600000
-```
+偶尔出现正常；如果长时间连续出现，则关注 `[FIX: memory-extraction-backlog]`。
 
 ---
 
 ## 常见问题
 
-### 1. 启动后提示未配置 API 信息
+### 启动后提示未配置模型
 
-检查：
+请在前端设置面板中填写模型地址、模型名和 API Key，或使用本地私有环境变量配置。
 
-- `API_URL`
-- `API_KEY`
-- `MODEL_NAME`
+不要把 API Key 写进源码或提交到 GitHub。
 
-或者在前端设置面板中填写。
-
-### 2. 修改了前端但页面没变化
+### 修改前端后页面没变化
 
 运行：
 
 ```bash
-node build.js
+npm run build
 ```
 
 然后刷新页面。
 
-### 3. 长文本上传后模型忽略四个选项
+### 直接 `node server.js` 可以吗？
 
-当前版本已加入 Prompt Compiler 和 worldbook 降权机制。仍出现时，可以：
+不推荐。
 
-- 降低 `JIUGUAN_WORLDBOOK_MAX_CHARS`；
-- 降低 `MEMPROXY_CONTEXT_WINDOW`；
-- 关闭或降低部分 memory 模块预算；
-- 检查上传文本中是否包含强命令式 prompt。
+建议使用：
 
-### 4. 本地绘图失败
+```bash
+npm start
+```
 
-检查：
+因为默认启动链路会先执行幂等补丁，并通过 `server-start.js` / `server-watchdog-bootstrap.js` 加载运行时兜底逻辑。
 
-- `AIDRAW_DIR` 是否正确；
-- `python/python.exe` 是否存在；
-- `generate.py` 是否可运行；
-- 是否超过 `AIDRAW_TIMEOUT_MS`。
+### 模型还是没有输出四个剧情选项怎么办？
+
+检查日志中是否出现：
+
+```text
+[jiuguan-watchdog] stream output failed original option-type check; sent branch replace event
+```
+
+如果出现，说明后端已发出替换事件；前端应替换尾部分支。
+
+如果页面仍不替换，请确认：
+
+- 已拉取最新远端；
+- 已运行 `npm run build`；
+- 使用 `npm start` 启动；
+- 浏览器已刷新，不是旧页面缓存。
+
+### 记忆提取一直追不上怎么办？
+
+如果日志长时间连续出现：
+
+```text
+Extraction already in-progress (sentinel is fresh), skipping extraction to avoid concurrency
+```
+
+说明 extraction 可能落后于对话速度。
+
+这属于当前已知风险，对应待修复项：
+
+```text
+[FIX: memory-extraction-backlog]
+```
+
+建议后续实现 pending extraction / catch-up runner。
 
 ---
 
-## 开发说明
+## 当前优先级
 
-当前项目仍偏向本地实验与个人工作流，建议优先保证：
+当前项目已经完成的核心稳定性修复：
 
-1. `server.js` 的 `/api/chat` 链路稳定；
-2. `memory/adapter.js` 不破坏 memory-proxy-plugin 的调用协议；
-3. 长文本世界书只作为 reference，不作为 system instruction；
-4. 修改 `src/` 后记得重新运行 `node build.js`。
+1. Prompt Compiler；
+2. worldbook reference-only 与预算裁剪；
+3. memory token budget；
+4. 原始四类剧情分支标签校验；
+5. LLM repair + deterministic fallback；
+6. 流式 `replace_branch`；
+7. 前端原生 `replace_branch` 支持；
+8. API Key 与运行时数据从仓库中移除并 gitignore。
+
+下一阶段建议重点：
+
+```text
+[FIX: memory-extraction-backlog]
+```
+
+也就是让 memory extraction 从“抽取中就 skip”升级为“抽取中标记 pending，完成后自动补跑最新差量”。
 
 ---
 
-## 许可证
+## 安全提醒
 
-当前仓库未声明开源许可证。默认情况下，除非后续补充 LICENSE 文件，否则请按私有项目处理。
+本项目可能处理：
+
+- API Key；
+- 私有小说文本；
+- 用户对话记录；
+- 长期记忆数据库；
+- 本地绘图输出；
+- 运行日志。
+
+公开仓库前务必确认：
+
+```text
+.env 未提交
+data/ 未提交
+plugin-config.json 未提交
+memory-proxy/data/ 未提交
+日志未提交
+真实 API Key 未提交
+```
+
+如果仓库曾经提交过真实密钥，应以“已泄露”处理，立即撤销并重置。
