@@ -16,7 +16,7 @@ import type { KeywordContext } from 'memory-proxy/retrieval/keyword-extractor';
 import { createExtractionCache, regexFallbackExtract, refreshKeywordCache, filteredRegexFallback } from 'memory-proxy/retrieval/keyword-extractor';
 import type { ExtractionCache } from 'memory-proxy/retrieval/keyword-extractor';
 import { computeFingerprint, computeUserAnchor, computeIntegrityHash, diffNewMessages, chunkMessages } from 'memory-proxy/extraction/incremental';
-import { getSession, updateSessionExtractionProgress, updateSessionIntegrityHashOnly, markExtractionInProgress, clearExtractionSentinel } from 'memory-proxy/storage/session-store';
+import { getSession, updateSessionExtractionProgress, updateSessionIntegrityHashOnly, markExtractionInProgress, clearExtractionSentinel, setExtractionPending, getExtractionPending } from 'memory-proxy/storage/session-store';
 import {
   decrementHandoffBoost,
   getActiveModelHandoff,
@@ -35,6 +35,13 @@ let currentChatId: string | null = null;
 // different chats no longer share or contaminate one another's keyword state.
 const cacheByChatId = new Map<string, ExtractionCache>();
 const CACHE_MAX_ENTRIES = 16;
+
+// [FIX: memory-extraction-backlog] Pending extraction state.
+// DB bool (extraction_pending) persists across restarts; this in-memory Map stores the
+// latest requestMessages + responseText so catch-up can diff against the updated fingerprint.
+// Key insight: mark pending on every skip, overwriting the previous entry — the latest
+// entry covers ALL skipped turns because ST chat history accumulates all prior messages.
+const pendingExtractionMap = new Map<string, { messages: ChatMessage[]; responseText: string }>();
 
 function getExtractionCache(key: string): ExtractionCache {
   let cache = cacheByChatId.get(key);
@@ -831,227 +838,255 @@ function scheduleExtraction(
   extractionOverlap: number,
   fallbackMessageCount: number
 ): void {
+  // Extract response text early (needed for pending Map storage even if extraction is skipped)
+  const responseText = typeof responseData === 'string'
+    ? extractStreamContent(responseData)
+    : extractResponseContent(responseData);
+
   Promise.resolve().then(async () => {
-    let currentIntegrityHash = '';
-    try {
-      let runExtractionPipeline: any;
-      try {
-        // Production deploys memory-proxy as CJS-loadable .ts files under node_modules.
-        ({ runExtractionPipeline } = require('memory-proxy/extraction/pipeline'));
-      } catch {
-        // Vitest resolves memory-proxy through Vite aliases, which require() cannot see.
-        const moduleName = 'memory-proxy/extraction/pipeline';
-        ({ runExtractionPipeline } = await import(moduleName));
-      }
-      // responseData is JSON for non-streaming, SSE text for streaming
-      const content = typeof responseData === 'string'
-        ? extractStreamContent(responseData)
-        : extractResponseContent(responseData);
-      // Exclude overlong reference material (e.g. a 500k-char novel attached as a user
-      // message) from extraction entirely. Such a message is world-book/setting anchor
-      // for the CHAT forward (kept verbatim in finalMessages), not dialogue to extract
-      // from — including it (even truncated) ballooned extraction prompts and triggered
-      // hash-mismatch re-extracts. Replace with a short placeholder so the message
-      // boundary stays intact for fingerprint/diff logic, but no novel text reaches the
-      // extraction LLM. Fingerprints/integrity-hash use the original requestMessages
-      // (computed below), so session identity and incremental tracking are unaffected.
-      const EXTRACTION_REF_MAX_CHARS = 8000;
-      const maskReferenceForExtraction = (msg: ChatMessage): ChatMessage => {
-        const c = msg.content || '';
-        if (c.length <= EXTRACTION_REF_MAX_CHARS) return msg;
-        return {
-          role: msg.role,
-          content: `[参考材料/世界书，${c.length} 字符，已从记忆抽取中排除]`,
-        };
-      };
-      const allMessages: ChatMessage[] = [...requestMessages, { role: 'assistant', content }].map(maskReferenceForExtraction);
+    // ── Pre-extraction sentinel check ──
+    const freshSession = getSession(sessionId);
+    const storedFp = freshSession?.last_fingerprint || '';
+    const decoded = decodeFingerprint(storedFp);
+    const lastFingerprint = decoded.fp;
+    const lastIntegrityHash = freshSession?.last_integrity_hash || '';
 
-      // === Incremental + Chunked Extraction ===
-      // 1. 读取上次提取指纹 + 完整性哈希
-      const freshSession = getSession(sessionId);
-      const storedFp = freshSession?.last_fingerprint || '';
-      // Decode the packed fingerprint + user anchor (see encodeFingerprint).
-      // __PROCESSING__ sentinel is preserved as-is for the stale-zombie check below.
-      const decoded = decodeFingerprint(storedFp);
-      let lastFingerprint = decoded.fp;
-      let lastUserAnchor = decoded.anchor;
-      const lastIntegrityHash = freshSession?.last_integrity_hash || '';
-      const currentRound = freshSession?.round ?? 0;
-
-      // Compute integrity hash on requestMessages (NOT allMessages) so that
-      // normal message growth (appending a new assistant response) doesn't
-      // create false mismatches at sample boundaries.
-      currentIntegrityHash = computeIntegrityHash(requestMessages);
-      // Remove the lastIntegrityHash guard — be fully defensive:
-      // even on first run (empty stored hash), if current hash differs from '',
-      // we want to catch it (computed hash is always non-empty for non-empty messages).
-      // Don't reset fingerprint if extraction is already in progress
-      // (__PROCESSING__ sentinel set by a concurrent extraction job).
-      if (currentIntegrityHash !== lastIntegrityHash && lastFingerprint !== '__PROCESSING__') {
-        console.log('[MemoryProxy] Integrity hash mismatch — messages were deleted or modified, resetting fingerprint for full re-extraction');
-        lastFingerprint = '';
-        lastUserAnchor = '';
-      } else if (lastFingerprint === '__PROCESSING__') {
-        // __PROCESSING__ sentinel found. Check if it's stale (crashed/zombie extraction).
-        // If last_active_at is > 2 min old, the sentinel is a zombie — clear it and proceed.
-        const sentinelAge = freshSession?.last_active_at ? Date.now() - freshSession.last_active_at : Infinity;
-        // 5 minutes — comfortably exceeds worst-case single-chunk extraction (max_tokens 16384)
-        // while still catching genuine zombie/crashed extractions. Multi-chunk extractions
-        // additionally heartbeat last_active_at before each chunk (see chunk loop below).
-        const SENTINEL_TIMEOUT_MS = 5 * 60 * 1000;
-        if (sentinelAge > SENTINEL_TIMEOUT_MS) {
-          console.log(`[MemoryProxy] __PROCESSING__ sentinel is stale (${Math.round(sentinelAge / 1000)}s old) — clearing zombie lock and proceeding`);
-          clearExtractionSentinel(sessionId, currentIntegrityHash);
-          lastFingerprint = '';
-          lastUserAnchor = '';
-        } else {
-          console.log('[MemoryProxy] Extraction already in-progress (sentinel is fresh), skipping extraction to avoid concurrency');
-          return;
-        }
-      }
-
-      // 2. 差量：只取新消息
-      const lastMsgCount = freshSession?.last_message_count;
-      const diff = diffNewMessages(allMessages, lastFingerprint, fallbackMessageCount, lastUserAnchor, lastMsgCount);
-      if (diff.newMessages.length === 0) {
-        console.log(`[MemoryProxy] Extraction skipped — no new messages (total: ${allMessages.length}, fingerprint: ${lastFingerprint ? 'matched' : 'first run'})`);
+    if (lastFingerprint === '__PROCESSING__') {
+      const sentinelAge = freshSession?.last_active_at ? Date.now() - freshSession.last_active_at : Infinity;
+      const SENTINEL_TIMEOUT_MS = 5 * 60 * 1000;
+      if (sentinelAge > SENTINEL_TIMEOUT_MS) {
+        console.log(`[MemoryProxy] __PROCESSING__ sentinel is stale (${Math.round(sentinelAge / 1000)}s old) — clearing zombie lock and proceeding`);
+        clearExtractionSentinel(sessionId, computeIntegrityHash(requestMessages));
+      } else {
+        // [FIX: memory-extraction-backlog] Don't silently skip — mark pending for catch-up
+        pendingExtractionMap.set(sessionId, { messages: [...requestMessages], responseText });
+        setExtractionPending(sessionId, true);
+        console.log('[MemoryProxy] Extraction already in-progress; marked pending catch-up');
         return;
       }
-      console.log(`[MemoryProxy] Extraction diff: ${diff.newMessages.length} new / ${allMessages.length} total (fingerprint ${diff.found ? 'matched at ' + diff.startIndex : 'NOT FOUND, fallback'})`);
+    }
 
-      // 3. 分块：如果新消息超限则切块
-      const chunks = chunkMessages(diff.newMessages, maxExtractionTokens, extractionOverlap);
-      if (chunks.length > 1) {
-        console.log(`[MemoryProxy] Extraction chunks: ${chunks.length} (${diff.newMessages.length} messages, max ${maxExtractionTokens} tokens/chunk, overlap ${extractionOverlap})`);
-      }
+    // Run extraction
+    await runExtractionOnce(
+      sessionId, requestMessages, responseText,
+      upstreamAgent, apiKey, upstreamUrl, upstreamPath,
+      model, extractionModel, extractionApiKey,
+      extractionUrl, extractionPath,
+      maxExtractionTokens, extractionOverlap, fallbackMessageCount,
+      'normal'
+    );
 
-      // 4. Save previous fingerprint before overwriting with sentinel.
-      //    If extraction fails, we restore it so incremental extraction can
-      //    continue from where it left off (retry the same messages).
-      // Preserve the FULL encoded form (fp||anchor) so the anchor survives a retry too.
-      const previousFingerprint = storedFp;
-
-      // 5. Mark extraction as in-progress (prevents concurrent re-extraction)
-      markExtractionInProgress(sessionId, currentIntegrityHash);
-
-      // 6. 逐块提取 (指纹在提取完成后、有产出时才保存)
-      // Compute both the 5-window fingerprint and the user anchor; pack them together
-      // so next turn can fall back to the anchor if depth-injection drift breaks the
-      // 5-window match.
-      const newFingerprint = encodeFingerprint(computeFingerprint(allMessages), computeUserAnchor(allMessages));
-      const llmCall = async (prompt: string) => {
-        const llmApiKey = extractionApiKey || apiKey;
-        if (!llmApiKey) return '';
-        const llmModel = (extractionModel || model) as string;
+    // ── Post-extraction: check for pending catch-up ──
+    // Only triggered by 'normal' source to prevent recursive catch-up chains.
+    // The pending Map stores the latest messages from skipped turns; diffNewMessages
+    // will find only genuinely new content (fingerprint was already advanced by the
+    // normal extraction that just completed).
+    if (getExtractionPending(sessionId)) {
+      const pending = pendingExtractionMap.get(sessionId);
+      if (pending) {
+        setExtractionPending(sessionId, false);
+        pendingExtractionMap.delete(sessionId);
+        console.log('[MemoryProxy] Pending extraction detected; starting catch-up');
         try {
-          const fetchOptions: Record<string, unknown> = {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmApiKey}` },
-            body: JSON.stringify({
-              model: llmModel,
-              messages: [{ role: 'user', content: prompt }],
-              max_tokens: 16384,  // v4 models output reasoning_content, need more headroom
-              temperature: 0,
-              // Only set reasoning_effort for v4/reasoning-class models.
-              // Non-reasoning APIs may reject the unknown parameter with HTTP 400.
-              ...(llmModel.includes('v4') || llmModel.includes('reasoning')
-                ? { reasoning_effort: 'low' as const }
-                : {}),
-            }),
-          };
-          if (upstreamAgent) fetchOptions.agent = upstreamAgent;
-          const llmUrl = `${extractionUrl}${extractionPath}`;
-          console.log('[MemoryProxy] Extraction LLM call →', llmUrl, 'model:', llmModel, 'promptLen:', prompt.length);
-          const res = await fetch(llmUrl, fetchOptions as RequestInit);
-          console.log('[MemoryProxy] Extraction LLM status:', res.status, 'contentType:', res.headers.get('content-type'));
-          if (!res.ok) {
-            const errText = await res.text();
-            console.log('[MemoryProxy] Extraction LLM failed:', res.status, errText.slice(0, 500));
-            return '';
-          }
-          const data: any = await res.json();
-          // v4 reasoning models often emit the real answer in reasoning_content and
-          // leave content empty (especially when the thinking budget eats the cap).
-          // Fall back to reasoning_content so the JSON the parsers look for is still
-          // recoverable — parseSalientResponse/parseFactEventResponse slice on
-          // '{"salients"' / '{"facts"' so they tolerate the surrounding prose.
-          const msg = data?.choices?.[0]?.message;
-          const reasoning = msg?.reasoning_content || '';
-          let result = msg?.content || '';
-          if (!result && reasoning) {
-            console.log(`[MemoryProxy] Extraction LLM content empty, falling back to reasoning_content (len=${reasoning.length})`);
-            result = reasoning;
-          }
-          if (!result) {
-            console.log('[MemoryProxy] Extraction LLM empty response — keys:', Object.keys(data || {}).join(', '), 'choices:', JSON.stringify(data?.choices?.[0]).slice(0, 300));
-          }
-          if (result.includes('rejected') || result.includes('high risk') || result.includes('content filter')) {
-            console.log('[MemoryProxy] Extraction rejected by provider safety filter — skipping extraction');
-            return '';
-          }
-          return result;
-        } catch (err: any) {
-          console.error('[MemoryProxy] Extraction LLM error:', err.message || err);
-          return '';
-        }
-      };
-
-      let totalFacts = 0;
-      let totalEvents = 0;
-      let chunksFailed = 0;
-      for (let ci = 0; ci < chunks.length; ci++) {
-        const chunk = chunks[ci];
-        const chunkLabel = chunks.length > 1 ? ` [chunk ${ci + 1}/${chunks.length}]` : '';
-        console.log(`[MemoryProxy] Extracting${chunkLabel}: ${chunk.length} messages`);
-        // Heartbeat: refresh last_active_at before each chunk so a long multi-chunk
-        // extraction is not mistaken for a zombie by the 2-min sentinel timeout
-        // (see SENTINEL_TIMEOUT_MS above). updateSessionIntegrityHashOnly is fire-and-forget.
-        if (chunks.length > 1) {
-          updateSessionIntegrityHashOnly(sessionId, currentIntegrityHash);
-        }
-        try {
-          const report = await runExtractionPipeline({
-            sessionId,
-            round: currentRound,
-            overflowMessages: chunk,
-            llmCall,
-          });
-          totalFacts += report.facts_extracted;
-          totalEvents += report.events_extracted;
-        } catch (chunkErr) {
-          chunksFailed++;
-          console.error(`[MemoryProxy] Chunk ${ci + 1}/${chunks.length} extraction failed:`, chunkErr);
+          await runExtractionOnce(
+            sessionId, pending.messages, pending.responseText,
+            upstreamAgent, apiKey, upstreamUrl, upstreamPath,
+            model, extractionModel, extractionApiKey,
+            extractionUrl, extractionPath,
+            maxExtractionTokens, extractionOverlap, fallbackMessageCount,
+            'catchup'
+          );
+          console.log('[MemoryProxy] Catch-up extraction complete');
+        } catch (e) {
+          console.error('[MemoryProxy] Catch-up extraction failed:', e instanceof Error ? e.message : String(e));
+          // Don't re-set pending — next normal extraction will retry
         }
       }
-
-      // Decide whether to advance the fingerprint. Three cases:
-      //  (1) chunks failed (LLM/network/parse error)  -> restore previous fingerprint so
-      //      next turn retries the SAME messages. The extraction genuinely didn't complete.
-      //  (2) all chunks succeeded but produced 0 facts/events -> ADVANCE the fingerprint.
-      //      DeepSeek returned 200 and judged these messages have nothing extractable
-      //      (smalltalk, greetings, pure action beats). Treating 0-output as "retry" caused
-      //      an infinite re-extraction loop: the same messages were re-sent every turn and
-      //      snowballed (2->4->6 msgs) while burning ~12k tokens/call. Marking them
-      //      processed stops the loop; genuinely new content next turn still extracts fine.
-      //  (3) produced facts/events and no failures    -> advance (original behavior).
-      if (chunksFailed > 0) {
-        console.log(`[MemoryProxy] Fingerprint NOT saved — ${chunksFailed} chunk(s) failed, will retry next turn`);
-        clearExtractionSentinel(sessionId, currentIntegrityHash, previousFingerprint);
-      } else {
-        if (totalFacts === 0 && totalEvents === 0) {
-          console.log(`[MemoryProxy] Extraction produced nothing (messages processed, no extractable content) — advancing fingerprint to skip re-extraction of these messages`);
-        }
-        updateSessionExtractionProgress(sessionId, newFingerprint, allMessages.length, currentIntegrityHash);
-      }
-      console.log(`[MemoryProxy] Extraction complete: ${totalFacts} facts, ${totalEvents} events (${chunks.length} chunk(s))`);
-    } catch (err) {
-      console.error('[MemoryProxy] Extraction error:', err);
-      // Clear __PROCESSING__ sentinel — extraction crashed, don't leave session stuck
-      try {
-        clearExtractionSentinel(sessionId, currentIntegrityHash);
-      } catch { /* best effort — DB may be in bad state */ }
     }
   });
+}
+
+/**
+ * [FIX: memory-extraction-backlog] Core extraction logic extracted from scheduleExtraction.
+ * Shared by normal extraction (source='normal') and pending catch-up (source='catchup').
+ *
+ * For 'catchup': requestMessages + responseText come from the pendingExtractionMap
+ * (which stored the latest messages from skipped turns). The fingerprint was already
+ * advanced by the preceding 'normal' extraction, so diffNewMessages will find exactly
+ * the messages that were skipped — no duplicates, no empty runs.
+ */
+async function runExtractionOnce(
+  sessionId: string,
+  requestMessages: ChatMessage[],
+  responseText: string,
+  upstreamAgent: http.Agent | undefined,
+  apiKey: string,
+  upstreamUrl: string,
+  upstreamPath: string,
+  model: string,
+  extractionModel: string,
+  extractionApiKey: string,
+  extractionUrl: string,
+  extractionPath: string,
+  maxExtractionTokens: number,
+  extractionOverlap: number,
+  fallbackMessageCount: number,
+  source: 'normal' | 'catchup'
+): Promise<void> {
+  let currentIntegrityHash = '';
+  try {
+    let runExtractionPipeline: any;
+    try {
+      // Production deploys memory-proxy as CJS-loadable .ts files under node_modules.
+      ({ runExtractionPipeline } = require('memory-proxy/extraction/pipeline'));
+    } catch {
+      // Vitest resolves memory-proxy through Vite aliases, which require() cannot see.
+      const moduleName = 'memory-proxy/extraction/pipeline';
+      ({ runExtractionPipeline } = await import(moduleName));
+    }
+    const EXTRACTION_REF_MAX_CHARS = 8000;
+    const maskReferenceForExtraction = (msg: ChatMessage): ChatMessage => {
+      const c = msg.content || '';
+      if (c.length <= EXTRACTION_REF_MAX_CHARS) return msg;
+      return {
+        role: msg.role,
+        content: `[参考材料/世界书，${c.length} 字符，已从记忆抽取中排除]`,
+      };
+    };
+    const allMessages: ChatMessage[] = [...requestMessages, { role: 'assistant' as const, content: responseText }].map(maskReferenceForExtraction);
+
+    // === Incremental + Chunked Extraction ===
+    // 1. Read fingerprint + integrity hash
+    const freshSession = getSession(sessionId);
+    const storedFp = freshSession?.last_fingerprint || '';
+    const decoded = decodeFingerprint(storedFp);
+    let lastFingerprint = decoded.fp;
+    let lastUserAnchor = decoded.anchor;
+    const lastIntegrityHash = freshSession?.last_integrity_hash || '';
+    const currentRound = freshSession?.round ?? 0;
+
+    currentIntegrityHash = computeIntegrityHash(requestMessages);
+    if (currentIntegrityHash !== lastIntegrityHash && lastFingerprint !== '__PROCESSING__') {
+      console.log('[MemoryProxy] Integrity hash mismatch — messages were deleted or modified, resetting fingerprint for full re-extraction');
+      lastFingerprint = '';
+      lastUserAnchor = '';
+    }
+
+    // 2. Diff: only extract new messages since last fingerprint
+    const lastMsgCount = freshSession?.last_message_count;
+    const diff = diffNewMessages(allMessages, lastFingerprint, fallbackMessageCount, lastUserAnchor, lastMsgCount);
+    if (diff.newMessages.length === 0) {
+      console.log(`[MemoryProxy] Extraction skipped — no new messages (source=${source}, total: ${allMessages.length}, fingerprint: ${lastFingerprint ? 'matched' : 'first run'})`);
+      return;
+    }
+    console.log(`[MemoryProxy] Extraction diff${source !== 'normal' ? ` (${source})` : ''}: ${diff.newMessages.length} new / ${allMessages.length} total (fingerprint ${diff.found ? 'matched at ' + diff.startIndex : 'NOT FOUND, fallback'})`);
+
+    // 3. Chunk if messages exceed token limit
+    const chunks = chunkMessages(diff.newMessages, maxExtractionTokens, extractionOverlap);
+    if (chunks.length > 1) {
+      console.log(`[MemoryProxy] Extraction chunks: ${chunks.length} (${diff.newMessages.length} messages, max ${maxExtractionTokens} tokens/chunk, overlap ${extractionOverlap})`);
+    }
+
+    // 4. Save previous fingerprint before overwriting with sentinel
+    const previousFingerprint = storedFp;
+
+    // 5. Mark extraction as in-progress (prevents concurrent re-extraction)
+    markExtractionInProgress(sessionId, currentIntegrityHash);
+
+    // 6. Per-chunk extraction (fingerprint saved after successful completion)
+    const newFingerprint = encodeFingerprint(computeFingerprint(allMessages), computeUserAnchor(allMessages));
+    const llmCall = async (prompt: string) => {
+      const llmApiKey = extractionApiKey || apiKey;
+      if (!llmApiKey) return '';
+      const llmModel = (extractionModel || model) as string;
+      try {
+        const fetchOptions: Record<string, unknown> = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llmApiKey}` },
+          body: JSON.stringify({
+            model: llmModel,
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 16384,
+            temperature: 0,
+            ...(llmModel.includes('v4') || llmModel.includes('reasoning')
+              ? { reasoning_effort: 'low' as const }
+              : {}),
+          }),
+        };
+        if (upstreamAgent) fetchOptions.agent = upstreamAgent;
+        const llmUrl = `${extractionUrl}${extractionPath}`;
+        console.log('[MemoryProxy] Extraction LLM call →', llmUrl, 'model:', llmModel, 'promptLen:', prompt.length);
+        const res = await fetch(llmUrl, fetchOptions as RequestInit);
+        console.log('[MemoryProxy] Extraction LLM status:', res.status, 'contentType:', res.headers.get('content-type'));
+        if (!res.ok) {
+          const errText = await res.text();
+          console.log('[MemoryProxy] Extraction LLM failed:', res.status, errText.slice(0, 500));
+          return '';
+        }
+        const data: any = await res.json();
+        const msg = data?.choices?.[0]?.message;
+        const reasoning = msg?.reasoning_content || '';
+        let result = msg?.content || '';
+        if (!result && reasoning) {
+          console.log(`[MemoryProxy] Extraction LLM content empty, falling back to reasoning_content (len=${reasoning.length})`);
+          result = reasoning;
+        }
+        if (!result) {
+          console.log('[MemoryProxy] Extraction LLM empty response — keys:', Object.keys(data || {}).join(', '), 'choices:', JSON.stringify(data?.choices?.[0]).slice(0, 300));
+        }
+        if (result.includes('rejected') || result.includes('high risk') || result.includes('content filter')) {
+          console.log('[MemoryProxy] Extraction rejected by provider safety filter — skipping extraction');
+          return '';
+        }
+        return result;
+      } catch (err: any) {
+        console.error('[MemoryProxy] Extraction LLM error:', err.message || err);
+        return '';
+      }
+    };
+
+    let totalFacts = 0;
+    let totalEvents = 0;
+    let chunksFailed = 0;
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? ` [chunk ${ci + 1}/${chunks.length}]` : '';
+      console.log(`[MemoryProxy] Extracting${chunkLabel}: ${chunk.length} messages`);
+      if (chunks.length > 1) {
+        updateSessionIntegrityHashOnly(sessionId, currentIntegrityHash);
+      }
+      try {
+        const report = await runExtractionPipeline({
+          sessionId,
+          round: currentRound,
+          overflowMessages: chunk,
+          llmCall,
+        });
+        totalFacts += report.facts_extracted;
+        totalEvents += report.events_extracted;
+      } catch (chunkErr) {
+        chunksFailed++;
+        console.error(`[MemoryProxy] Chunk ${ci + 1}/${chunks.length} extraction failed:`, chunkErr);
+      }
+    }
+
+    // Decide whether to advance the fingerprint
+    if (chunksFailed > 0) {
+      console.log(`[MemoryProxy] Fingerprint NOT saved — ${chunksFailed} chunk(s) failed, will retry next turn`);
+      clearExtractionSentinel(sessionId, currentIntegrityHash, previousFingerprint);
+    } else {
+      if (totalFacts === 0 && totalEvents === 0) {
+        console.log(`[MemoryProxy] Extraction produced nothing (messages processed, no extractable content) — advancing fingerprint to skip re-extraction of these messages`);
+      }
+      updateSessionExtractionProgress(sessionId, newFingerprint, allMessages.length, currentIntegrityHash);
+    }
+    console.log(`[MemoryProxy] Extraction complete${source !== 'normal' ? ` (${source})` : ''}: ${totalFacts} facts, ${totalEvents} events (${chunks.length} chunk(s))`);
+  } catch (err) {
+    console.error(`[MemoryProxy] Extraction error${source !== 'normal' ? ` (${source})` : ''}:`, err);
+    try {
+      clearExtractionSentinel(sessionId, currentIntegrityHash);
+    } catch { /* best effort — DB may be in bad state */ }
+  }
 }
 
 function extractResponseContent(data: unknown): string {

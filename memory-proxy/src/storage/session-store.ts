@@ -38,7 +38,7 @@ export function createSession(
     [id, character_id, chat_id, branch_id, now, now]
   );
 
-  return { id, character_id, chat_id, branch_id, round: 0, created_at: now, last_active_at: now, last_fingerprint: '', last_message_count: 0, last_integrity_hash: '' };
+  return { id, character_id, chat_id, branch_id, round: 0, created_at: now, last_active_at: now, last_fingerprint: '', last_message_count: 0, last_integrity_hash: '', extraction_pending: 0 };
 }
 
 export function getSession(id: string): Session | null {
@@ -109,5 +109,20 @@ function rowToSession(row: any): Session {
     last_fingerprint: row.last_fingerprint ?? '',
     last_message_count: row.last_message_count ?? 0,
     last_integrity_hash: row.last_integrity_hash ?? '',
+    extraction_pending: row.extraction_pending ?? 0,
   };
+}
+
+/** [FIX: memory-extraction-backlog] Mark extraction as pending (sentinel fresh, skip → need catch-up later) */
+export function setExtractionPending(id: string, pending: boolean): void {
+  safePersist(
+    'UPDATE sessions SET extraction_pending = ?, last_active_at = ? WHERE id = ?',
+    [pending ? 1 : 0, Date.now(), id]
+  );
+}
+
+/** [FIX: memory-extraction-backlog] Check if extraction catch-up is pending */
+export function getExtractionPending(id: string): boolean {
+  const rows = execQuery('SELECT extraction_pending FROM sessions WHERE id = ?', [id]);
+  return rows.length > 0 && rows[0].extraction_pending === 1;
 }

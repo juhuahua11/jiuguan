@@ -18,4 +18,6 @@ export interface Session {
   last_message_count: number;
   /** 全量消息完整性哈希（采样），用于检测删除/swipe */
   last_integrity_hash: string;
+  /** [FIX: memory-extraction-backlog] 是否有待追赶的 extraction */
+  extraction_pending: number;
 }

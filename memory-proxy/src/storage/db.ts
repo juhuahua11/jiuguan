@@ -134,6 +134,13 @@ function runMigrations(): void {
     // Column already exists
   }
 
+  // [FIX: memory-extraction-backlog] V5: pending extraction flag for catch-up
+  try {
+    db.run('ALTER TABLE sessions ADD COLUMN extraction_pending INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // Column already exists
+  }
+
   db.run(`
     CREATE TABLE IF NOT EXISTS events (
       id TEXT PRIMARY KEY,
