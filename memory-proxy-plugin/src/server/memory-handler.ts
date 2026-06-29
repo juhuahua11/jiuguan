@@ -856,7 +856,7 @@ function scheduleExtraction(
       const SENTINEL_TIMEOUT_MS = 5 * 60 * 1000;
       if (sentinelAge > SENTINEL_TIMEOUT_MS) {
         console.log(`[MemoryProxy] __PROCESSING__ sentinel is stale (${Math.round(sentinelAge / 1000)}s old) — clearing zombie lock and proceeding`);
-        clearExtractionSentinel(sessionId, computeIntegrityHash(requestMessages));
+        clearExtractionSentinel(sessionId, ''); // empty hash → runExtractionOnce will detect mismatch and reset fingerprint for full re-extraction
       } else {
         // [FIX: memory-extraction-backlog] Don't silently skip — mark pending for catch-up
         pendingExtractionMap.set(sessionId, { messages: [...requestMessages], responseText });
