@@ -377,6 +377,10 @@ function makeRepairBody(compiledBody, currentOutput) {
     stream: false,
     temperature: 0.2,
     max_tokens: WATCHDOG_CONFIG.repairMaxTokens,
+    // 内部修复请求标记：memory-handler 看到此标记后走 fast path，
+    // 只转发上游、跳过 session/round/continuity/retrieval/extraction 等
+    // 所有 memory side effects，避免污染记忆与轮次计数（见 [FIX: memory-extraction-backlog] P0）。
+    jiuguan_internal_repair: true,
     messages: [...messages, { role: 'assistant', content: String(currentOutput || '').slice(-8000) }, { role: 'user', content: buildLLMRepairInstruction(currentOutput) }],
   };
 }

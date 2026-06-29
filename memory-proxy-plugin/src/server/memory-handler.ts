@@ -63,6 +63,19 @@ function getExtractionCache(key: string): ExtractionCache {
  */
 const KEYWORD_REFRESH_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// Upstream fetch timeout policy — shared by the main path (fetchOnce) and the
+// internal-repair fast path so both stay in lockstep. Defined at module scope
+// because the fast path runs before the main path's try block, where these
+// were originally declared.
+// - FIRST_BYTE_TIMEOUT_MS: bounds how long we wait for the upstream to start
+//   responding (connect + first response byte). Catches dead/queued connections.
+// - NONSTREAM_TIMEOUT_MS: for non-stream requests the whole body must arrive in
+//   bounded time. RP generations on slow upstreams can legitimately take minutes,
+//   so 5 min bounds the worst case without the indefinite hang that exhausted
+//   the connection pool, while staying clear of the 30s first-byte guard.
+const FIRST_BYTE_TIMEOUT_MS = 30_000;
+const NONSTREAM_TIMEOUT_MS = 5 * 60 * 1000;
+
 function getCachedOrRegexKeywords(
   messages: ChatMessage[],
   cache: ExtractionCache
@@ -133,6 +146,52 @@ export async function handleMemoryRequest(
   const upstreamPort = headers['x-upstream-port'] || '443';
   const upstreamUrl = `https://${upstreamHost}:${upstreamPort}`;
   const upstreamPath = headers['x-upstream-path'] || '/chat/completions';
+
+  // ── P0: Internal repair fast path ([FIX: memory-extraction-backlog]) ──
+  // watchdog 的格式修复请求是内部动作，不是用户剧情推进。若走完整 memory 链路会
+  // 递增 round / 触发 extraction 占 sentinel / 污染 continuity，形成"格式不对→repair
+  // →占 sentinel→用户 extraction 被 skip→记忆滞后→更易丢格式→更多 repair"的正反馈
+  // 恶性循环。此 fast path 在任何 memory side effect 之前拦截，只转发上游并返回。
+  if (body.jiuguan_internal_repair === true) {
+    console.log('[MemoryProxy] Internal repair request: bypassing memory side effects');
+    // 剥掉内部标记与 chat_id，避免上游收到未知字段或误建 session
+    const { jiuguan_internal_repair: _flag, chat_id: _chatId, ...repairBody } = body;
+    repairBody.stream = false;
+    // 复用主路径的 timeout 策略（FIRST_BYTE_TIMEOUT_MS + NONSTREAM_TIMEOUT_MS，模块级共享）
+    // 与 upstreamAgent，行为与下方 fetchOnce 对齐，避免 fast path 与主路径分叉。
+    const firstByteController = new AbortController();
+    const totalController = new AbortController();
+    const firstByteTimer = setTimeout(() => firstByteController.abort(), FIRST_BYTE_TIMEOUT_MS);
+    const totalTimer = setTimeout(() => totalController.abort(), NONSTREAM_TIMEOUT_MS);
+    firstByteController.signal.addEventListener('abort', () => totalController.abort());
+    const fetchOptions: Record<string, unknown> = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify(repairBody),
+      signal: totalController.signal,
+    };
+    if (upstreamAgent) fetchOptions.agent = upstreamAgent;
+    try {
+      const res = await fetch(`${upstreamUrl}${upstreamPath}`, fetchOptions as RequestInit);
+      if (!res.ok) {
+        const errText = await res.text();
+        return { status: res.status, headers: { 'content-type': 'application/json' }, body: { error: errText } };
+      }
+      const data = await res.json();
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: data };
+    } catch (err: any) {
+      const cause = err?.cause;
+      const aborted = err?.name === 'AbortError' || cause?.name === 'AbortError' || cause?.code === 'ABORT_ERR';
+      const reason = aborted
+        ? `upstream timeout: repair fast path exceeded ${FIRST_BYTE_TIMEOUT_MS}ms first-byte or ${NONSTREAM_TIMEOUT_MS}ms total`
+        : (cause instanceof Error ? `fetch failed: ${cause.name}: ${cause.message}` : (err?.message || 'fetch failed'));
+      console.error('[MemoryProxy] Internal repair upstream fetch failed:', reason);
+      return { status: 502, headers: { 'content-type': 'application/json' }, body: { error: reason } };
+    } finally {
+      clearTimeout(firstByteTimer);
+      clearTimeout(totalTimer);
+    }
+  }
 
   // 3. Initialize database
   await ensureDb(pluginDir);
@@ -458,15 +517,7 @@ export async function handleMemoryRequest(
   //
   // Defined OUTSIDE the try block so the catch handler (which builds the error
   // message) can reference them — a const inside try is scoped to try and would
-  // throw ReferenceError in catch.
-  const FIRST_BYTE_TIMEOUT_MS = 30_000;
-  // Non-streaming requests must receive the FULL response in one shot (no chunking),
-  // so for large-context RP turns on slow upstreams (e.g. MiMo with 2200+ messages)
-  // the server-side generation can legitimately take several minutes. 5 min bounds
-  // the worst case without the indefinite hang that exhausted the connection pool,
-  // while staying clear of the 30s first-byte guard (which catches a truly dead upstream).
-  const NONSTREAM_TIMEOUT_MS = 5 * 60 * 1000;
-
+  // throw ReferenceError in catch. (Values live at module scope; see comment there.)
   // A single upstream attempt: arms the staged timeouts (first-byte + non-stream total)
   // and resolves with the Response once the first byte arrives. `reasonOut` is filled with
   // which timer fired if the attempt is aborted, so the caller's catch can distinguish the
