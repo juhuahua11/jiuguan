@@ -879,7 +879,7 @@ function scheduleExtraction(
     }
 
     // Run extraction
-    await runExtractionOnce(
+    const normalResult = await runExtractionOnce(
       sessionId, requestMessages, responseText,
       upstreamAgent, apiKey, upstreamUrl, upstreamPath,
       model, extractionModel, extractionApiKey,
@@ -889,10 +889,10 @@ function scheduleExtraction(
     );
 
     // ── Post-extraction: check for pending catch-up ──
-    // Only triggered by 'normal' source to prevent recursive catch-up chains.
-    // The pending Map stores the latest messages from skipped turns; diffNewMessages
-    // will find only genuinely new content (fingerprint was already advanced by the
-    // normal extraction that just completed).
+    if (!normalResult.ok && !normalResult.skipped) {
+      console.warn('[MemoryProxy] Normal extraction did not complete cleanly; skipping pending catch-up for this cycle');
+      return;
+    }
     if (getExtractionPending(sessionId)) {
       const pending = pendingExtractionMap.get(sessionId);
       if (pending) {
