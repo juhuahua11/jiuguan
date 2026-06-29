@@ -117,6 +117,18 @@ interface ForwardUpstreamResult {
   body: unknown;
 }
 
+/** [FIX: memory-extraction-backlog] Structured result from runExtractionOnce */
+interface ExtractionRunResult {
+  ok: boolean;
+  skipped: boolean;
+  facts: number;
+  events: number;
+  chunks: number;
+  chunksFailed: number;
+  source: 'normal' | 'catchup';
+  reason?: string;
+}
+
 /**
  * Forward a request body to the upstream chat-completions endpoint, with the
  * staged timeout policy (first-byte + non-stream total) and connection-class
@@ -888,7 +900,7 @@ function scheduleExtraction(
         pendingExtractionMap.delete(sessionId);
         console.log('[MemoryProxy] Pending extraction detected; starting catch-up');
         try {
-          await runExtractionOnce(
+          const result = await runExtractionOnce(
             sessionId, pending.messages, pending.responseText,
             upstreamAgent, apiKey, upstreamUrl, upstreamPath,
             model, extractionModel, extractionApiKey,
@@ -896,11 +908,20 @@ function scheduleExtraction(
             maxExtractionTokens, extractionOverlap, fallbackMessageCount,
             'catchup'
           );
-          console.log('[MemoryProxy] Catch-up extraction complete');
+          if (result.skipped) {
+            console.log('[MemoryProxy] Catch-up extraction skipped — no new messages');
+          } else if (!result.ok) {
+            console.warn(`[MemoryProxy] Catch-up extraction did not complete cleanly — reason=${result.reason || 'unknown'} chunksFailed=${result.chunksFailed}`);
+          } else {
+            console.log(`[MemoryProxy] Catch-up extraction complete: ${result.facts} facts, ${result.events} events (${result.chunks} chunk(s))`);
+          }
         } catch (e) {
           console.error('[MemoryProxy] Catch-up extraction failed:', e instanceof Error ? e.message : String(e));
-          // Don't re-set pending — next normal extraction will retry
+          // Don't re-set pending — fingerprint not advanced, next normal extraction will retry
         }
+      } else {
+        console.log('[MemoryProxy] Pending extraction flag set but no pending snapshot; clearing flag after normal extraction');
+        setExtractionPending(sessionId, false);
       }
     }
   });
@@ -932,7 +953,7 @@ async function runExtractionOnce(
   extractionOverlap: number,
   fallbackMessageCount: number,
   source: 'normal' | 'catchup'
-): Promise<void> {
+): Promise<ExtractionRunResult> {
   let currentIntegrityHash = '';
   try {
     let runExtractionPipeline: any;
@@ -977,7 +998,7 @@ async function runExtractionOnce(
     const diff = diffNewMessages(allMessages, lastFingerprint, fallbackMessageCount, lastUserAnchor, lastMsgCount);
     if (diff.newMessages.length === 0) {
       console.log(`[MemoryProxy] Extraction skipped — no new messages (source=${source}, total: ${allMessages.length}, fingerprint: ${lastFingerprint ? 'matched' : 'first run'})`);
-      return;
+      return { ok: true, skipped: true, facts: 0, events: 0, chunks: 0, chunksFailed: 0, source, reason: 'no-new-messages' };
     }
     console.log(`[MemoryProxy] Extraction diff${source !== 'normal' ? ` (${source})` : ''}: ${diff.newMessages.length} new / ${allMessages.length} total (fingerprint ${diff.found ? 'matched at ' + diff.startIndex : 'NOT FOUND, fallback'})`);
 
@@ -1074,18 +1095,21 @@ async function runExtractionOnce(
     if (chunksFailed > 0) {
       console.log(`[MemoryProxy] Fingerprint NOT saved — ${chunksFailed} chunk(s) failed, will retry next turn`);
       clearExtractionSentinel(sessionId, currentIntegrityHash, previousFingerprint);
-    } else {
-      if (totalFacts === 0 && totalEvents === 0) {
-        console.log(`[MemoryProxy] Extraction produced nothing (messages processed, no extractable content) — advancing fingerprint to skip re-extraction of these messages`);
-      }
-      updateSessionExtractionProgress(sessionId, newFingerprint, allMessages.length, currentIntegrityHash);
+      console.log(`[MemoryProxy] Extraction complete${source !== 'normal' ? ` (${source})` : ''}: ${totalFacts} facts, ${totalEvents} events (${chunks.length} chunk(s), ${chunksFailed} failed)`);
+      return { ok: false, skipped: false, facts: totalFacts, events: totalEvents, chunks: chunks.length, chunksFailed, source, reason: 'chunk-failed' };
     }
+    if (totalFacts === 0 && totalEvents === 0) {
+      console.log(`[MemoryProxy] Extraction produced nothing (messages processed, no extractable content) — advancing fingerprint to skip re-extraction of these messages`);
+    }
+    updateSessionExtractionProgress(sessionId, newFingerprint, allMessages.length, currentIntegrityHash);
     console.log(`[MemoryProxy] Extraction complete${source !== 'normal' ? ` (${source})` : ''}: ${totalFacts} facts, ${totalEvents} events (${chunks.length} chunk(s))`);
+    return { ok: true, skipped: false, facts: totalFacts, events: totalEvents, chunks: chunks.length, chunksFailed: 0, source };
   } catch (err) {
     console.error(`[MemoryProxy] Extraction error${source !== 'normal' ? ` (${source})` : ''}:`, err);
     try {
       clearExtractionSentinel(sessionId, currentIntegrityHash);
     } catch { /* best effort — DB may be in bad state */ }
+    return { ok: false, skipped: false, facts: 0, events: 0, chunks: 0, chunksFailed: 0, source, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
