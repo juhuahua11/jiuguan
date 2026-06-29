@@ -76,6 +76,137 @@ const KEYWORD_REFRESH_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const FIRST_BYTE_TIMEOUT_MS = 30_000;
 const NONSTREAM_TIMEOUT_MS = 5 * 60 * 1000;
 
+// Connection-class errors worth retrying: the upstream was unreachable at that
+// instant (MiMo intermittently drops TCP connects). These are transient — a fresh
+// socket a moment later usually succeeds. We do NOT retry 'total' timeouts (slow
+// generation — retrying doubles cost) or HTTP error responses (deterministic).
+function isRetryableConnectionError(err: any): boolean {
+  const cause = err?.cause;
+  const code = cause?.code || err?.code;
+  const name = cause?.name || err?.name;
+  return code === 'UND_ERR_CONNECT_TIMEOUT'
+    || code === 'ECONNRESET'
+    || code === 'ENOTFOUND'
+    || code === 'EAI_AGAIN'
+    || name === 'ConnectTimeoutError'
+    || name === 'HeadersTimeoutError';
+}
+
+const MAX_RETRIES = 2;
+const RETRY_BACKOFF_MS = 1500;
+
+interface ForwardUpstreamOptions {
+  requestBody: Record<string, unknown>;
+  wantStream: boolean;
+  apiKey: string;
+  upstreamUrl: string;
+  upstreamPath: string;
+  upstreamAgent?: http.Agent;
+}
+
+interface ForwardUpstreamResult {
+  status: number;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+/**
+ * Forward a request body to the upstream chat-completions endpoint, with the
+ * staged timeout policy (first-byte + non-stream total) and connection-class
+ * retry that the main chat path uses. Shared by:
+ *   - the internal-repair fast path (bypasses memory side effects)
+ *   - (the main path keeps its own fetchOnce for streaming body capture, but
+ *     this helper centralizes the timeout/retry/error-format contract)
+ *
+ * For non-streaming requests it resolves the parsed JSON body; on failure it
+ * returns a 502 with a diagnostic `error` string, matching the main path's
+ * error envelope so callers don't need a separate handler.
+ */
+async function forwardUpstreamRequest(opts: ForwardUpstreamOptions): Promise<ForwardUpstreamResult> {
+  const { requestBody, wantStream, apiKey, upstreamUrl, upstreamPath, upstreamAgent } = opts;
+  // reasonOut tags which timer fired so the error message can distinguish
+  // "upstream never started responding" (first-byte) from "started but too slow" (total).
+  const reasonOut: { value: 'first-byte' | 'total' | null } = { value: null };
+
+  // A single upstream attempt: arms the staged timeouts and resolves with the
+  // Response once the first byte arrives. Throws on network failure / abort.
+  const fetchOnce = async (): Promise<Response> => {
+    reasonOut.value = null;
+    const firstByteController = new AbortController();
+    const totalController = new AbortController();
+    const firstByteTimer = setTimeout(() => {
+      reasonOut.value = 'first-byte';
+      firstByteController.abort();
+    }, FIRST_BYTE_TIMEOUT_MS);
+    // For non-streaming, also arm a total timeout (combined with first-byte via a 2nd controller).
+    const totalTimer = wantStream
+      ? null
+      : setTimeout(() => {
+        reasonOut.value = 'total';
+        totalController.abort();
+      }, NONSTREAM_TIMEOUT_MS);
+    // Abort if EITHER fires.
+    firstByteController.signal.addEventListener('abort', () => totalController.abort());
+
+    const fetchOptions: Record<string, unknown> = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify(requestBody),
+      signal: totalController.signal,
+    };
+    if (upstreamAgent) fetchOptions.agent = upstreamAgent;
+
+    try {
+      return await fetch(`${upstreamUrl}${upstreamPath}`, fetchOptions as RequestInit);
+    } finally {
+      clearTimeout(firstByteTimer);
+      if (totalTimer) clearTimeout(totalTimer);
+    }
+  };
+
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let upstreamRes: Response;
+    try {
+      upstreamRes = await fetchOnce();
+    } catch (err: any) {
+      // Only retry transient connection-class errors, and only if a timer didn't fire
+      // for 'total' (slow generation — retrying is pure waste). first-byte aborts ARE
+      // retried: a connection that never sent a byte is the same class as a connect timeout.
+      const firedTimer = reasonOut.value;
+      const isTotalTimeout = firedTimer === 'total';
+      if (isTotalTimeout || !isRetryableConnectionError(err) || attempt >= MAX_RETRIES) {
+        const cause = err?.cause;
+        const aborted = err?.name === 'AbortError' || cause?.name === 'AbortError' || cause?.code === 'ABORT_ERR';
+        const reason = aborted
+          ? (firedTimer === 'total'
+            ? `upstream timeout: generation exceeded ${NONSTREAM_TIMEOUT_MS}ms total (first byte DID arrive — upstream started but finished too slowly)`
+            : `upstream timeout: no first byte within ${FIRST_BYTE_TIMEOUT_MS}ms (upstream never started responding — dead/queued connection)`)
+          : (cause instanceof Error ? `fetch failed: ${cause.name}: ${cause.message}` : (err?.message || 'fetch failed'));
+        console.error('[MemoryProxy] Upstream fetch failed:', reason, cause?.code ? `(code=${cause.code})` : '');
+        return { status: 502, headers: { 'content-type': 'application/json' }, body: { error: reason } };
+      }
+      attempt++;
+      console.warn(`[MemoryProxy] Upstream connection error (attempt ${attempt}/${MAX_RETRIES}), retrying in ${RETRY_BACKOFF_MS}ms:`, err?.cause?.message || err?.message || err);
+      await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS));
+      continue;
+    }
+
+    // First byte arrived — connection established. From here, streaming is
+    // bounded only by per-chunk idle (internal-server.ts), not total time.
+    if (!upstreamRes.ok) {
+      const errText = await upstreamRes.text();
+      return { status: upstreamRes.status, headers: { 'content-type': 'application/json' }, body: { error: errText } };
+    }
+
+    // Non-streaming: resolve the full JSON body. (Streaming callers should not
+    // use this helper — they need the raw Response to wrap for SSE capture.)
+    const data = await upstreamRes.json();
+    return { status: 200, headers: { 'content-type': 'application/json' }, body: data };
+  }
+}
+
 function getCachedOrRegexKeywords(
   messages: ChatMessage[],
   cache: ExtractionCache
@@ -155,42 +286,18 @@ export async function handleMemoryRequest(
   if (body.jiuguan_internal_repair === true) {
     console.log('[MemoryProxy] Internal repair request: bypassing memory side effects');
     // 剥掉内部标记与 chat_id，避免上游收到未知字段或误建 session
-    const { jiuguan_internal_repair: _flag, chat_id: _chatId, ...repairBody } = body;
+    const { jiuguan_internal_repair: _flag, chat_id: _chatId, ...repairBody } = body as Record<string, unknown>;
     repairBody.stream = false;
-    // 复用主路径的 timeout 策略（FIRST_BYTE_TIMEOUT_MS + NONSTREAM_TIMEOUT_MS，模块级共享）
-    // 与 upstreamAgent，行为与下方 fetchOnce 对齐，避免 fast path 与主路径分叉。
-    const firstByteController = new AbortController();
-    const totalController = new AbortController();
-    const firstByteTimer = setTimeout(() => firstByteController.abort(), FIRST_BYTE_TIMEOUT_MS);
-    const totalTimer = setTimeout(() => totalController.abort(), NONSTREAM_TIMEOUT_MS);
-    firstByteController.signal.addEventListener('abort', () => totalController.abort());
-    const fetchOptions: Record<string, unknown> = {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify(repairBody),
-      signal: totalController.signal,
-    };
-    if (upstreamAgent) fetchOptions.agent = upstreamAgent;
-    try {
-      const res = await fetch(`${upstreamUrl}${upstreamPath}`, fetchOptions as RequestInit);
-      if (!res.ok) {
-        const errText = await res.text();
-        return { status: res.status, headers: { 'content-type': 'application/json' }, body: { error: errText } };
-      }
-      const data = await res.json();
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: data };
-    } catch (err: any) {
-      const cause = err?.cause;
-      const aborted = err?.name === 'AbortError' || cause?.name === 'AbortError' || cause?.code === 'ABORT_ERR';
-      const reason = aborted
-        ? `upstream timeout: repair fast path exceeded ${FIRST_BYTE_TIMEOUT_MS}ms first-byte or ${NONSTREAM_TIMEOUT_MS}ms total`
-        : (cause instanceof Error ? `fetch failed: ${cause.name}: ${cause.message}` : (err?.message || 'fetch failed'));
-      console.error('[MemoryProxy] Internal repair upstream fetch failed:', reason);
-      return { status: 502, headers: { 'content-type': 'application/json' }, body: { error: reason } };
-    } finally {
-      clearTimeout(firstByteTimer);
-      clearTimeout(totalTimer);
-    }
+    // 复用主路径的上游转发 helper（含 first-byte/total timeout、连接类 retry、错误格式），
+    // 行为与主路径完全一致，避免 fast path 分叉。repair 非流式，直接拿回 JSON。
+    return forwardUpstreamRequest({
+      requestBody: repairBody,
+      wantStream: false,
+      apiKey,
+      upstreamUrl,
+      upstreamPath,
+      upstreamAgent,
+    });
   }
 
   // 3. Initialize database
@@ -561,27 +668,10 @@ export async function handleMemoryRequest(
     }
   };
 
-  // Connection-class errors that are worth retrying: the upstream was unreachable at that
-  // instant (MiMo intermittently drops TCP connects). These are transient — a fresh socket
-  // a moment later usually succeeds. We do NOT retry:
-  //  - 'total' timeout: that means generation started but was slow; retrying just doubles cost.
-  //  - 'first-byte' timeout: borderline; treated as a connection issue and retried, since a
-  //    dead/queued connection is also transient and a retry often reaches a healthy backend.
-  //  - HTTP error responses (handled below, not thrown): those are deterministic, retry won't help.
-  const isRetryableConnectionError = (err: any): boolean => {
-    const cause = err?.cause;
-    const code = cause?.code || err?.code;
-    const name = cause?.name || err?.name;
-    return code === 'UND_ERR_CONNECT_TIMEOUT'
-      || code === 'ECONNRESET'
-      || code === 'ENOTFOUND'
-      || code === 'EAI_AGAIN'
-      || name === 'ConnectTimeoutError'
-      || name === 'HeadersTimeoutError';
-  };
-
-  const MAX_RETRIES = 2;
-  const RETRY_BACKOFF_MS = 1500;
+  // Connection-class retry policy: isRetryableConnectionError / MAX_RETRIES /
+  // RETRY_BACKOFF_MS live at module scope (shared with forwardUpstreamRequest).
+  // The main path keeps its own fetchOnce + retry loop because it needs the raw
+  // Response for streaming body capture, which the shared helper consumes.
   let upstreamRes: Response;
   try {
     let attempt = 0;
