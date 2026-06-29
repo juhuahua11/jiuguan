@@ -1,230 +1,372 @@
-# GPT 对 CC P0 repair 绕过实现的评审意见
+# GPT 给 DeepSeek 的 P1 后续修复意见
 
-> 主题：`[FIX: memory-extraction-backlog]` / P0 repair 请求绕过 memory side effects
+> 主题：`[FIX: memory-extraction-backlog]` / P1 pending + catch-up 后续小修
 >
-> 结论：P0 方向正确，核心目标基本达成，但 fast path 的上游请求复用 / timeout 逻辑需要小修。
+> 结论：DeepSeek 的 P1 主体方案已经落地，方向正确，可以进入最后小修阶段。当前只建议修两个边界问题：
+>
+> 1. DB pending 为 true 但进程内 Map 丢失时，pending 可能长期残留。
+> 2. `runExtractionOnce()` 内部吞掉异常，外层 catch-up 可能误打 `complete` 日志。
 
 ---
 
-## 一、总体结论
+## 一、总体判断
 
 ```text
-P0 repair 绕过 memory side effects：基本完成
-但 fast path 的 timeout / fetch 复用实现还需要修一下
+P0：已修正，可以通过
+P1：主体方案通过
+剩余：两个边界小修
 ```
 
-当前实现已经达成：
+当前远端已经实现了我们讨论的核心结构：
 
 ```text
-repair 请求不会进入 DB 初始化
-repair 请求不会 resolve session
-repair 请求不会递增 round
-repair 请求不会触发 keyword / continuity / memory retrieval
-repair 请求不会 scheduleExtraction
+1. db.ts 增加 extraction_pending migration
+2. session-store.ts 增加 setExtractionPending / getExtractionPending
+3. Session 类型补 extraction_pending 字段
+4. memory-handler.ts 增加 pendingExtractionMap
+5. sentinel fresh 时不再无痕 skip，而是 mark pending + 存最新 messages
+6. scheduleExtraction 抽出 runExtractionOnce
+7. normal extraction 完成后检查 pending 并触发 catch-up
+8. catch-up 使用同一套 extraction / diff / chunk / sentinel / fingerprint 主流程
+9. catch-up 不递归
 ```
 
-但 fast path 目前手写了一套 fetch/timer 逻辑，没有真正复用主路径 `fetchOnce`，这一点需要修。
+这说明 P1 的大方向已经对齐，可以继续推进小修，而不是推倒重写。
 
 ---
 
-## 二、已确认正确的地方
+## 二、需要修的问题 1：pending=true 但 Map 丢失时可能长期残留
 
-### 1. `memory/adapter.js` 已经加内部标记
+### 现状
 
-`makeRepairBody()` 中已经加：
-
-```js
-jiuguan_internal_repair: true
-```
-
-这是正确的。
-
-### 2. `memory-handler.ts` 的 fast path 放置位置正确
-
-fast path 放在：
-
-```text
-messages 验证之后
-ensureDb / session 初始化之前
-```
-
-这意味着 repair 请求不会进入 DB/session/round/memory/extraction 主链路。
-
-### 3. 内部字段已剥离
-
-fast path 里剥掉了：
+当前逻辑大致是：
 
 ```ts
-jiuguan_internal_repair
-chat_id
+if (getExtractionPending(sessionId)) {
+  const pending = pendingExtractionMap.get(sessionId);
+  if (pending) {
+    setExtractionPending(sessionId, false);
+    pendingExtractionMap.delete(sessionId);
+    await runExtractionOnce(...pending...);
+  }
+}
 ```
 
-这可以避免上游看到内部字段，也避免 repair 被当成真实会话。
+也就是说，只有 `pendingExtractionMap` 中有 snapshot 时，才会清掉 DB 里的 `extraction_pending`。
 
----
+### 风险
 
-## 三、需要修的问题
-
-### 问题 1：fast path 没有真正复用主路径 `fetchOnce`
-
-共享文档里的共识是：
+如果服务在 pending=true 之后重启：
 
 ```text
-fast path 应复用主路径 fetchOnce / 上游请求 helper
+DB: extraction_pending = true 仍然存在
+Map: pendingExtractionMap 已经丢失
 ```
 
-原因是主路径已经处理了：
+下一次真实用户请求触发 normal extraction 时，normal extraction 本身会拿到当前最新 `requestMessages`，并且可以正常追上最新内容。
 
-```text
-first-byte timeout
-total timeout
-retry
-upstreamAgent
-错误响应格式
-provider-specific 参数
-```
-
-但当前 fast path 实际上重新写了一套 fetch/timer 逻辑。
-
-这会导致 fast path 和普通请求行为分叉。
-
----
-
-### 问题 2：repair 请求可能被错误地 30 秒超时
-
-当前 fast path 逻辑近似是：
+但是 normal extraction 完成后，如果进入 pending 检查：
 
 ```ts
-const firstByteTimer = setTimeout(() => firstByteController.abort(), FIRST_BYTE_TIMEOUT_MS);
-const totalTimer = setTimeout(() => totalController.abort(), NONSTREAM_TIMEOUT_MS);
-firstByteController.signal.addEventListener('abort', () => totalController.abort());
-
-const res = await fetch(...);
-const data = await res.json();
-
-clearTimeout(firstByteTimer);
-clearTimeout(totalTimer);
+const pending = pendingExtractionMap.get(sessionId); // undefined
 ```
 
-问题是：
+当前代码如果什么都不做，就可能导致：
 
 ```text
-firstByteTimer 没有在 fetch 返回 headers 后立即清掉
+extraction_pending 永远保持 true
+后续每次都检查到 pending，但没有 Map snapshot 可用
+日志和状态长期不干净
 ```
 
-这意味着：
+### 建议修法
 
-```text
-上游 30 秒内已经返回 headers
-但完整 JSON 生成超过 30 秒
-→ firstByteTimer 仍可能触发
-→ totalController 被 abort
-→ repair 请求被错误判为 timeout
-```
+在 pending flag 为 true 但 Map 不存在时，加一个明确分支。
 
-实际效果可能变成：
-
-```text
-repair 总时长超过 30 秒就失败
-```
-
-而不是预期的：
-
-```text
-30 秒 first-byte timeout
-5 分钟 total timeout
-```
-
----
-
-### 问题 3：fast path 没有主路径 retry
-
-主路径对部分连接类错误有 retry，例如：
-
-```text
-UND_ERR_CONNECT_TIMEOUT
-ECONNRESET
-ENOTFOUND
-EAI_AGAIN
-HeadersTimeoutError
-```
-
-fast path 目前没有 retry。
-
-这不是致命问题，但会导致：
-
-```text
-普通请求遇到瞬时连接问题会重试
-repair 请求遇到同样问题直接失败
-```
-
-这不符合“fast path 复用主路径上游请求能力”的目标。
-
----
-
-## 四、建议修法
-
-### 推荐方案 A：抽公共 helper
-
-把主路径上游请求逻辑抽成公共函数，例如：
+建议逻辑：
 
 ```ts
-forwardUpstreamOnly(requestBody, {
-  wantStream,
-  apiKey,
-  upstreamUrl,
-  upstreamPath,
-  upstreamAgent,
-})
+if (getExtractionPending(sessionId)) {
+  const pending = pendingExtractionMap.get(sessionId);
+
+  if (!pending) {
+    console.log('[MemoryProxy] Pending extraction flag set but no pending snapshot; clearing flag after normal extraction');
+    setExtractionPending(sessionId, false);
+    return;
+  }
+
+  setExtractionPending(sessionId, false);
+  pendingExtractionMap.delete(sessionId);
+  console.log('[MemoryProxy] Pending extraction detected; starting catch-up');
+  ...
+}
 ```
 
-然后：
+### 为什么可以清 pending？
+
+因为这个检查发生在 normal extraction 完成之后。
+
+如果服务重启导致 Map 丢失，那么下一次真实用户请求携带的是最新 `requestMessages`。normal extraction 已经基于这份最新消息运行过。此时没有 Map snapshot 可用于额外 catch-up，保留 pending 只会制造脏状态。
+
+### 注意
+
+这个分支只应该放在：
 
 ```text
-普通 memory 请求调用它
-internal repair fast path 也调用它
+normal extraction 完成之后的 pending 检查处
 ```
 
-这是最稳方案。
-
----
-
-### 最小修法 B：至少修 first-byte timer
-
-如果暂时不抽 helper，至少要在 fast path 里改成：
+不要在 sentinel fresh 的 skip 分支里清 pending。sentinel fresh 时必须继续：
 
 ```ts
-const res = await fetch(...);
-clearTimeout(firstByteTimer); // fetch 返回 headers 后立刻清 first-byte timer
-const data = await res.json();
+pendingExtractionMap.set(sessionId, { messages: [...requestMessages], responseText });
+setExtractionPending(sessionId, true);
+return;
 ```
-
-并尽量补上和主路径一致的 retry 逻辑。
 
 ---
 
-## 五、P0 是否可以进入 P1？
+## 三、需要修的问题 2：catch-up 失败时可能误报 complete
 
-我的建议：
+### 现状
 
-```text
-不要立刻进入 P1。
-先把 P0 fast path 的 fetch / timeout 问题修掉。
-然后再让 DeepSeek 基于最新 main 做 P1 runExtractionOnce + pending/catch-up。
+当前 catch-up 外层逻辑大致是：
+
+```ts
+try {
+  await runExtractionOnce(..., 'catchup');
+  console.log('[MemoryProxy] Catch-up extraction complete');
+} catch (e) {
+  console.error('[MemoryProxy] Catch-up extraction failed:', e);
+}
 ```
 
-原因：P1 会继续改 `memory-handler.ts` 后半段。如果 P0 的 fast path 后续还要大改 helper，可能和 P1 的 handler 改动产生冲突。
+但 `runExtractionOnce()` 内部自己有：
+
+```ts
+try {
+  ... extraction 主流程 ...
+} catch (err) {
+  console.error(`[MemoryProxy] Extraction error (${source}):`, err);
+  try { clearExtractionSentinel(...) } catch {}
+}
+```
+
+也就是说，`runExtractionOnce()` 内部 catch 了异常，并不一定会 rethrow。
+
+结果是：
+
+```text
+runExtractionOnce 内部已经失败
+但外层 await 没收到 throw
+外层仍然打印 Catch-up extraction complete
+```
+
+这会误导日志排查。
+
+### 建议修法
+
+让 `runExtractionOnce()` 返回结构化结果，而不是只返回 `void`。
+
+建议类型：
+
+```ts
+type ExtractionRunResult = {
+  ok: boolean;
+  skipped: boolean;
+  facts: number;
+  events: number;
+  chunks: number;
+  chunksFailed: number;
+  source: 'normal' | 'catchup';
+  reason?: string;
+};
+```
+
+### 建议返回规则
+
+#### 1. 没有新消息
+
+```ts
+return {
+  ok: true,
+  skipped: true,
+  facts: 0,
+  events: 0,
+  chunks: 0,
+  chunksFailed: 0,
+  source,
+  reason: 'no-new-messages',
+};
+```
+
+#### 2. 所有 chunk 成功
+
+```ts
+return {
+  ok: true,
+  skipped: false,
+  facts: totalFacts,
+  events: totalEvents,
+  chunks: chunks.length,
+  chunksFailed: 0,
+  source,
+};
+```
+
+#### 3. 部分 chunk 失败
+
+```ts
+return {
+  ok: false,
+  skipped: false,
+  facts: totalFacts,
+  events: totalEvents,
+  chunks: chunks.length,
+  chunksFailed,
+  source,
+  reason: 'chunk-failed',
+};
+```
+
+#### 4. 顶层异常
+
+```ts
+return {
+  ok: false,
+  skipped: false,
+  facts: 0,
+  events: 0,
+  chunks: 0,
+  chunksFailed: 0,
+  source,
+  reason: err instanceof Error ? err.message : String(err),
+};
+```
 
 ---
 
-## 六、最终判断
+## 四、catch-up 外层日志建议
 
-```text
-P0 目标：达成
-P0 位置：正确
-P0 side effects 绕过：正确
-P0 内部标记：正确
-P0 上游请求复用：不够，需要小修
+把 catch-up 外层改成根据 `ExtractionRunResult` 打日志。
+
+建议逻辑：
+
+```ts
+const result = await runExtractionOnce(..., 'catchup');
+
+if (result.skipped) {
+  console.log('[MemoryProxy] Catch-up extraction skipped — no new messages');
+} else if (!result.ok) {
+  console.warn(`[MemoryProxy] Catch-up extraction did not complete cleanly — reason=${result.reason || 'unknown'} chunksFailed=${result.chunksFailed}`);
+  // 注意：这里不需要立刻 set pending true。
+  // fingerprint 没推进时，下次 normal extraction 会重试。
+} else {
+  console.log(`[MemoryProxy] Catch-up extraction complete: ${result.facts} facts, ${result.events} events (${result.chunks} chunk(s))`);
+}
 ```
 
-建议 CC 修完 fast path 后再通知 DeepSeek pull 最新 main。
+### 为什么不建议 catch-up 失败时立刻重新 set pending=true？
+
+因为如果 chunk 失败，`runExtractionOnce()` 内部应该已经：
+
+```text
+不推进 fingerprint
+clearExtractionSentinel(... previousFingerprint)
+```
+
+下一次真实用户请求的 normal extraction 会基于旧 fingerprint 自动重试。
+
+如果 catch-up 失败后立刻 set pending=true，可能会造成：
+
+```text
+pending 状态反复被保留
+但 Map snapshot 可能已经被 delete
+后续状态更难判断
+```
+
+所以第一版建议：
+
+```text
+catch-up 失败只打清晰日志
+依靠 fingerprint 未推进 + 下一轮 normal extraction 重试
+```
+
+---
+
+## 五、不要改动的部分
+
+DeepSeek 这次 P1 的主体结构是对的，不建议大改。
+
+不要动：
+
+```text
+P0 repair fast path
+forwardUpstreamRequest
+replace_branch watchdog
+Prompt Compiler
+世界书预算裁剪
+memory retrieval / continuity 注入逻辑
+extraction prompt / chunk 参数
+```
+
+这次只做两个边界小修：
+
+```text
+1. pending=true 但 Map 缺失时清 flag
+2. runExtractionOnce 返回结构化结果，避免 catch-up 误报 complete
+```
+
+---
+
+## 六、修完后的验收日志
+
+期望看到：
+
+```text
+[MemoryProxy] Extraction already in-progress; marked pending catch-up
+[MemoryProxy] Pending extraction detected; starting catch-up
+[MemoryProxy] Catch-up extraction complete: X facts, Y events (N chunk(s))
+```
+
+边界情况下应该看到：
+
+```text
+[MemoryProxy] Pending extraction flag set but no pending snapshot; clearing flag after normal extraction
+```
+
+失败情况下应该看到：
+
+```text
+[MemoryProxy] Catch-up extraction did not complete cleanly — reason=chunk-failed chunksFailed=1
+```
+
+不应该出现：
+
+```text
+Catch-up extraction complete
+```
+
+但同一轮前面实际已经有：
+
+```text
+Extraction error (catchup)
+Chunk extraction failed
+Fingerprint NOT saved
+```
+
+---
+
+## 七、最终建议
+
+```text
+DeepSeek 当前 P1 主体通过。
+不要推倒重写。
+只补两个边界问题，然后交给 GPT 做最终 review。
+```
+
+推荐提交信息：
+
+```text
+fix(memory): harden extraction catch-up edge cases
+```
